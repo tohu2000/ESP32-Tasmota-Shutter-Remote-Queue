@@ -52,18 +52,18 @@ Because moving a specific shutter requires a sequence of pulses (Wake -> Step ->
 
 ## 📐 Hardware Architecture
 
-### Schematic (Direct Drive)
-The following diagram illustrates the direct connection between the ESP32 and the 433MHz Remote PCB. No MOSFETs are used; the ESP32 GPIOs interface directly with the remote's micro-switch pads and power rail.
+### Schematic (Direct Drive / High-Side Switching)
+In this setup, GPIO 18 acts as the 3.3V power source for the remote. Driving the pin LOW cuts power to the device, allowing for a hard hardware reset.
 
 ```text
        ESP32 DEVKIT                433MHz REMOTE PCB
     ┌────────────────┐           ┌────────────────────┐
-    │        GPIO 18 ├──────┬────┤ GND (ON)           │
+    │        GPIO 18 ├──────┬────┤ VCC (+)            │
     │                │     ┌┴┐   │                    │
-    │                │  100uF│   │  [Buttons to GND]  │
-    │                │  (Elko)   │                    │
+    │                │  100uF│   │                    │
+    │                │  (Elko)   │  [Buttons to GND]  │
     │                │     └┬┘   │                    │
-    │           3.3V ├──────┴────┤ VCC (3.3)          │
+    │            GND ├──────┴────┤ GND (-)            │
     │                │           └──────────┬─────────┘
     │        GPIO 13 ├──────────────────────┤ UP
     │        GPIO 12 ├──────────────────────┤ DOWN
@@ -71,16 +71,16 @@ The following diagram illustrates the direct connection between the ESP32 and th
     │        GPIO 27 ├──────────────────────┤ CH (-)
     │        GPIO 26 ├──────────────────────┤ CH (+)
     └────────────────┘           
-    (All Buttons: GPIO Open Drain | Power: Active-Low)
+    (All Buttons: GPIO Open Drain | Power: Active-Low for Reset)
 ```
 
 ### ⚡ Technical Specifications
 * **Power Management (GPIO 18)**: 
-    * **HIGH**: Power OFF (Reset State)
-    * **LOW**: Power ON (Operating State)
-* **Buffer Capacitor**: A **100µF Electrolytic (Elko)** is wired across the remote's power input to stabilize the 3.3V rail during high-current 433MHz RF transmissions.
-* **Control Logic**: All button GPIOs are configured in **Open Drain** mode. This allows the ESP32 to pull the signal to Ground (simulating a button press) without driving the line HIGH, which protects the remote's internal MCU and allows manual button use. NOTE: This, of course, may result in the internal state of Tasmota being incorrect.
-
+    * **LOW**: Power OFF (Reset State)
+    * **HIGH**: Power ON (Operating State)
+* **Buffer Capacitor**: A **100µF Electrolytic (Elko)** is wired across the remote's power input (VCC to GND). This is critical as the ESP32 GPIO must handle the instantaneous current surge when the 433MHz transmitter fires.
+* **Control Logic**: All button GPIOs (12, 13, 14, 26, 27) are configured in **Open Drain** mode. They act as electronic switches that pull the remote's button pads to ground to trigger commands.
+  
 ### ⚙️ Tasmota Initialization
 Run these commands in the Tasmota Console to set up the pins before loading the Berry script:
 
