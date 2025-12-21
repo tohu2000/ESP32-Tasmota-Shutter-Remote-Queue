@@ -51,34 +51,41 @@ Because moving a specific shutter requires a sequence of pulses (Wake -> Step ->
 ## 🔍 Details
 
 ### GPIO Mapping
-The following pins are configured on the ESP32 to interface with the remote's micro-switches. By using **Open Drain**, we ensure the ESP32 doesn't interfere with the remote's battery or manual button presses.
+The following pins are configured on the ESP32 to interface with the remote's micro-switches. By using **Open Drain**, we ensure the ESP32 doesn't interfere with the remote's internal logic or manual button presses.
 
 | Function | ESP32 GPIO | Tasmota Component | Description |
 | :--- | :---: | :--- | :--- |
-| **Up** | GPIO 13 | User (Output) | Simulates the 'Up' button press |
-| **Down** | GPIO 12 | User (Output) | Simulates the 'Down' button press |
+| **Up** | GPIO 13 | User (Output) | Simulates 'Up' button press |
+| **Down** | GPIO 12 | User (Output) | Simulates 'Down' button press |
 | **Stop** | GPIO 14 | User (Output) | Simulates 'Stop' (also used for Wake-up) |
-| **Step Left** | GPIO 27 | User (Output) | Decrements the channel |
-| **Step Right**| GPIO 26 | User (Output) | Increments the channel |
-| **Power/VCC** | GPIO 25 | User (Output) | Controls a MOSFET for hard power reset |
+| **Step Left** | GPIO 27 | User (Output) | Decrements the channel (-) |
+| **Step Right**| GPIO 26 | User (Output) | Increments the channel (+) |
+| **Power/VCC** | **GPIO 18** | User (Output) | Powers the RC; used for hard reset/sync |
 
 ### Tasmota Configuration
-Run these commands in the Tasmota Console to initialize the hardware environment. The `SetOption` commands ensure that the pins default to a "High Impedance" (disconnected) state so the remote can sleep properly.
+Run these commands in the Tasmota Console. Setting the control pins to mode `2` (**Open Drain**) prevents the ESP32 from "holding" the remote's buttons high when not in use.
 
 ```tasmota
-// Set GPIOs to Open Drain Mode (1 = Pull-Up, 2 = Open Drain)
-// Replace <pin> with the GPIO numbers above
+// Set Control Pins to Open Drain Mode
 GpioConfig 13, 2
 GpioConfig 12, 2
 GpioConfig 14, 2
 GpioConfig 27, 2
 GpioConfig 26, 2
-GpioConfig 25, 0 // VCC Control usually standard output
+
+// Set Power Pin (GPIO 18) to Standard Output
+GpioConfig 18, 1
 
 // Global Settings
-SetOption114 1 // Decouple Buttons from Relays if using internal pins
+SetOption114 1 // Decouple Buttons from Relays
 SetOption1 1   // Restrict Button multipress
 ```
+
+### ⚡ Power Management & Sync Logic (`shutter.be`)
+The `shutter.be` script utilizes **GPIO 18** to manage the remote's state. 
+1. **Cold Boot**: On Tasmota startup, GPIO 18 is pulled LOW for 4 seconds and then HIGH.
+2. **Hardware Sync**: This power cycle forces the remote to reset to its internal default (Channel 1).
+3. **Software Sync**: The Berry script initializes its internal `current_channel` variable to `1` simultaneously, ensuring the bridge and physical remote are perfectly aligned without needing a two-way RF link.
 
 ### ⚡ Power Management
 The remote is powered directly from the ESP32's 3.3V rail (or via the VCC GPIO through a transistor). The Berry script handles a **4-second cold boot** delay on startup to ensure the remote's LCD has stabilized before the first channel-sync pulse is sent.
