@@ -48,38 +48,80 @@ Because moving a specific shutter requires a sequence of pulses (Wake -> Step ->
 | 2 | **Step Right** | Pulse to move to the target channel. | 450ms |
 | 3 | **Direction** | Sends the `Up/Down` pulse. | 250ms |
 
-## 🔍 Details
+## 📐 Hardware Architecture
 
-### GPIO Mapping
-The following pins are configured on the ESP32 to interface with the remote's micro-switches. By using **Open Drain**, we ensure the ESP32 doesn't interfere with the remote's internal logic or manual button presses.
+### Schematic (Direct Drive)
+The following diagram illustrates the direct connection between the ESP32 and the 433MHz Remote PCB. No MOSFETs are used; the ESP32 GPIOs interface directly with the remote's micro-switch pads and power rail.
 
-| Function | ESP32 GPIO | Tasmota Component | Description |
-| :--- | :---: | :--- | :--- |
-| **Up** | GPIO 13 | User (Output) | Simulates 'Up' button press |
-| **Down** | GPIO 12 | User (Output) | Simulates 'Down' button press |
-| **Stop** | GPIO 14 | User (Output) | Simulates 'Stop' (also used for Wake-up) |
-| **Step Left** | GPIO 27 | User (Output) | Decrements the channel (-) |
-| **Step Right**| GPIO 26 | User (Output) | Increments the channel (+) |
-| **Power/VCC** | **GPIO 18** | User (Output) | Powers the RC; used for hard reset/sync |
+```text
+       ESP32 DEVKIT                433MHz REMOTE PCB
+    ┌────────────────┐           ┌────────────────────┐
+    │        GPIO 18 ├───────────┤ VCC (+)            │
+    │                │     ┌┴┐   │                    │
+    │                │  100uF│   │  [Buttons to GND]  │
+    │                │  (Elko)   │                    │
+    │                │     └┬┘   │                    │
+    │            GND ├──────┴────┤ GND (-)            │
+    │                │           └──────────┬─────────┘
+    │        GPIO 13 ├──────────────────────┤ UP
+    │        GPIO 12 ├──────────────────────┤ DOWN
+    │        GPIO 14 ├──────────────────────┤ STOP
+    │        GPIO 27 ├──────────────────────┤ CH (-)
+    │        GPIO 26 ├──────────────────────┤ CH (+)
+    └────────────────┘           
+    (All Buttons: GPIO Open Drain | Power: Active-Low)
+```
 
-### Tasmota Configuration
-Run these commands in the Tasmota Console. Setting the control pins to mode `2` (**Open Drain**) prevents the ESP32 from "holding" the remote's buttons high when not in use.
+### ⚡ Technical Specifications
+* **Power Management (GPIO 18)**: 
+    * **HIGH**: Power OFF (Reset State)
+    * **LOW**: Power ON (Operating State)
+* **Buffer Capacitor**: A **100µF Electrolytic (Elko)** is wired across the remote's power input to stabilize the 3.3V rail during high-current 433MHz RF transmissions.
+* **Control Logic**: All button GPIOs are configured in **Open Drain** mode. This allows the ESP32 to pull the signal to Ground (simulating a button press) without driving the line HIGH, which protects the remote's internal MCU and allows manual button use. NOTE: This, of course, may result in the internal state of Tasmota being incorrect.
+
+### ⚙️ Tasmota Initialization
+Run these commands in the Tasmota Console to set up the pins before loading the Berry script:
 
 ```tasmota
-// Set Control Pins to Open Drain Mode
+// Configure Power Pin (Active-Low)
+GpioConfig 18, 1    // Mode: Output
+DigitalWrite 18, 0  // Default to ON
+
+// Configure Button Pins (Mode 2: Open Drain)
 GpioConfig 13, 2
 GpioConfig 12, 2
 GpioConfig 14, 2
 GpioConfig 27, 2
 GpioConfig 26, 2
 
-// Set Power Pin (GPIO 18) to Standard Output
-GpioConfig 18, 1
-
 // Global Settings
-SetOption114 1 // Decouple Buttons from Relays
-SetOption1 1   // Restrict Button multipress
+SetOption114 1  // Detach buttons from internal relays
+SetOption1 1    // Disable multipress
 ```
+
+### 🔄 Sync Routine
+Because the remote defaults to **Channel 01** upon power-up, the software ensures synchronization by cycling the power on boot:
+1. **Pulse HIGH** on GPIO 18 for 4 seconds (Cold Reset).
+2. **Pull LOW** on GPIO 18 to resume operation.
+3. Software sets `current_channel = 1` to match the hardware state.
+
+## 🔄 Synchronization Logic
+The `shutter.be` script manages the power state via **GPIO 18** to ensure Tasmota and the hardware are in sync:
+1.  **Hard Reset**: On startup, GPIO 18 is pulsed **HIGH** (Power OFF) for 4 seconds, then pulled **LOW** (Power ON).
+2.  **State Alignment**: This power cycle forces the remote to boot into its default state (Channel 01).
+3.  **Variable Sync**: The script sets `current_channel = 1` internally, ensuring the bridge starts with a 100% accurate channel count.
+
+## 🔄 Synchronization Logic
+The `shutter.be` script manages the power state via **GPIO 18**. 
+1.  **Hard Reset**: On startup, GPIO 18 is held LOW for 4 seconds, then pulled HIGH.
+2.  **State Alignment**: This power cycle forces the remote to boot into its default state (Channel 01).
+3.  **Variable Sync**: The script simultaneously sets its internal `current_channel` to `1`, ensuring software and hardware are perfectly synchronized.
+
+### 🔄 Sync Logic (`shutter.be`)
+Because the remote is powered by **GPIO 18**, we can force a "Hard Sync":
+1. **Boot**: `gpio.digital_write(18, 0)` (Power OFF for 4 seconds).
+2. **Ready**: `gpio.digital_write(18, 1)` (Power ON).
+3. **Result**: The remote's MCU restarts at **Channel 01**. The Berry script sets `current_channel = 1`. We now have a guaranteed starting point without feedback.
 
 ### ⚡ Power Management & Sync Logic (`shutter.be`)
 The `shutter.be` script utilizes **GPIO 18** to manage the remote's state. 
