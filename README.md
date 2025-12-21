@@ -1,2 +1,141 @@
-# ESP32-Tasmota-Shutter-Remote-Queue
-This project provides a professional MQTT-to-RF Bridge. It transforms a standard, isolated multi-channel RF remote control into a fully manageable MQTT device. 
+# 433MHz Multi-Channel Shutter Bridge for Tasmota (Berry)
+
+
+
+This project provides a professional-grade bridge between **Tasmota (ESP32)** and proprietary **433MHz RF** multi-channel shutter remotes. It uses the Berry scripting language to handle complex channel-stepping logic, hardware synchronization, and specialized functions like the "Shade" (intermediate) position.
+
+## 📟 Hardware Compatibility
+Designed for the common 5-button 433MHz remote family (OOK/FSK) found in the shutter industry.
+
+| Installed Hardware | Completed Build (Back) |
+| :---: | :---: |
+| <img src="rc_installed.jpg" width="50%"> | <img src="rc_closed_back_pack_neat.jpg" width="50%"> |
+
+* **10-Channel LCD (Target Model)**: Displays channels `00` through `09`.
+* **15-Channel LCD**: Displays channels `00` through `15`.
+* **Model Note**: Also compatible with 5-channel LED variants as they share the same standby and wake-up logic.
+
+### 📸 Build Gallery
+
+| Component Wiring | PCB Detail |
+| :---: | :---: |
+| <img src="rc_open_wired.jpg" width="40%"> | <img src="rc_open_pcb_top_wired.jpg" width="40%"> |
+| **Capacitor Mod** | **Final Assembly** |
+| <img src="rc_open_elko_wired.jpg" width="40%"> | <img src="rc_closed_back_pack.jpg" width="40%"> |
+
+## 🛠 Technical Implementation
+
+### Open Drain (Open Gate) Parallel Wiring
+The ESP32 is wired in parallel with the physical buttons of the remote. This is made possible by configuring the ESP32 GPIOs as **Output Open Drain**. In this state, the ESP32 only pulls the line to Ground (simulating a button press) or remains high-impedance (floating). 
+
+### Synchronization & Manual Use
+* **Hard Reset**: The ESP32 controls the remote's power (VCC). On boot, it performs a 4-second power cycle to force the remote back to its default starting channel.
+* **Manual Parity**: Physical buttons remain functional thanks to the Open Drain configuration.
+
+## ⛓️ Sequential Command Queuing
+
+Because moving a specific shutter requires a sequence of pulses (Wake -> Step -> Move), the script uses a non-blocking FIFO queue.
+
+| Step | Action | Description | Delay |
+| :--- | :--- | :--- | :--- |
+| 1 | **Wake-up** | Sends a `Stop` pulse to turn on the remote. | 800ms |
+| 2 | **Step Right** | Pulse to move to the target channel. | 450ms |
+| 3 | **Direction** | Sends the `Up/Down` pulse. | 250ms |
+
+# 433MHz Multi-Channel Shutter Bridge for Tasmota (Berry)
+
+This project provides a professional-grade bridge between **Tasmota (ESP32)** and proprietary **433MHz RF** multi-channel shutter remotes. It uses the Berry scripting language to handle complex channel-stepping logic, hardware synchronization, and specialized functions like the "Shade" (intermediate) position.
+
+
+
+## 📟 Hardware Compatibility
+Designed for the common 5-button 433MHz remote family (OOK/FSK) found in the shutter industry.
+
+* **10-Channel LCD (Target Model)**: Displays channels `00` through `09`.
+* **15-Channel LCD**: Displays channels `00` through `15`.
+* **Model Note**: Also compatible with 5-channel LED variants as they share the same standby and wake-up logic.
+* **Global Mode**: All variants feature a "00" channel to actuate all shutters at once. This script deliberately bypasses that mode to maintain precise individual state tracking.
+
+## 🛠 Technical Implementation
+
+### Open Drain (Open Gate) Parallel Wiring
+The ESP32 is wired in parallel with the physical buttons of the remote. This is made possible by configuring the ESP32 GPIOs as **Output Open Drain**. In this state, the ESP32 only pulls the line to Ground (simulating a button press) or remains high-impedance (floating). 
+
+This allows the physical buttons on the remote to remain fully functional alongside the ESP32, as the ESP32 effectively "disappears" from the circuit when not actively pulsing.
+
+### Synchronization & Manual Use
+Since the remote buttons are still active, manual interaction is possible. However, because 433MHz is a one-way protocol, manual channel changes on the remote will not be detected by the ESP32. To maintain synchronization:
+* **Hard Reset**: The ESP32 controls the remote's power (VCC). On boot, it performs a 4-second power cycle to force the remote back to its default starting channel.
+* **Enhancement Path**: For users requiring 100% manual/software parity, the project could be modified by detaching the physical buttons from the remote's MCU and routing them as inputs into the ESP32 for full signal interception.
+
+## ⛓️ Sequential Command Queuing
+
+Because moving a specific shutter requires a sequence of pulses (Wake -> Step -> Move), the script uses a non-blocking FIFO queue. This ensures that pulses never overlap and the remote has sufficient time to process each "tap."
+
+### Example: "Move Shutter 3 Down"
+If the remote is currently on **Channel 1** and is in **Sleep mode**, a single `shutter_full 3,down` command triggers the following automated sequence:
+
+| Step | Action | Description | Delay |
+| :--- | :--- | :--- | :--- |
+| 1 | **Wake-up** | Sends a `Stop` pulse to turn on the remote screen/LEDs. | 800ms |
+| 2 | **Step Right** | Sends pulse to move from Ch 1 to Ch 2. | 450ms |
+| 3 | **Step Right** | Sends pulse to move from Ch 2 to Ch 3. | 450ms |
+| 4 | **Direction** | Sends the `Down` pulse on the now-active Ch 3. | 250ms |
+| 5 | **Redundancy** | Sends a second `Down` pulse for reliability. | 550ms |
+
+
+
+## 🏠 Home Assistant Integration
+
+Integrate your shutters into Home Assistant using MQTT Template Covers and Sensors.
+
+### 1. Cover Entity
+Add this to your `configuration.yaml`.
+
+```yaml
+cover:
+  - platform: mqtt
+    name: "Living Room Shutter"
+    command_topic: "cmnd/shutter_controller/shutter_full"
+    state_topic: "stat/shutter_controller/STATE"
+    availability_topic: "tele/shutter_controller/LWT"
+    payload_open: "3,up"
+    payload_close: "3,down"
+    payload_stop: "3,stop"
+    state_open: "Idle"
+    state_closed: "Sleep"
+    optimistic: true
+```
+
+### 2. Monitoring Sensors
+Add these to track the active channel and bridge status in real-time.
+
+```yaml
+mqtt:
+  sensor:
+    - name: "Shutter Current Channel"
+      state_topic: "stat/shutter_controller/CHANNEL"
+      icon: "mdi:numeric"
+    - name: "Shutter Bridge Status"
+      state_topic: "stat/shutter_controller/STATE"
+      icon: "mdi:remote"
+```
+
+### 3. Shade Helper (Script)
+```yaml
+script:
+  shutter_shade:
+    alias: "Set Living Room to Shade"
+    sequence:
+      - service: mqtt.publish
+        data:
+          topic: "cmnd/shutter_controller/shutter_full"
+          payload: "3,shade"
+```
+
+---
+
+## 🚀 Installation
+1.  **Upload**: Place `shutter.be` and `webGUI.be` in the Tasmota File System.
+2.  **Auto-Start**: Add `load("shutter.be")` and `load("webGUI.be")` to your `autoexec.be`.
+3.  **Developer Note**: This script uses a **"Flat-If"** architecture to maintain high stability. This avoids the `elif` parser bug found in some Tasmota Berry versions, ensuring the script compiles and runs reliably on the ESP32-D0WD-V3 chipset.
