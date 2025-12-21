@@ -1,16 +1,17 @@
 # 433MHz Multi-Channel Shutter Bridge for Tasmota (Berry)
 
-
-
 This project provides a professional-grade bridge between **Tasmota (ESP32)** and proprietary **433MHz RF** multi-channel shutter remotes. It uses the Berry scripting language to handle complex channel-stepping logic, hardware synchronization, and specialized functions like the "Shade" (intermediate) position.
 
 ## 📟 Hardware Compatibility
 Designed for the common 5-button 433MHz remote family (OOK/FSK) found in the shutter industry.
 
+> [!CAUTION]
+> **Voltage Warning:** The original remote is designed for a **3V CR2340 lithium cell**. This project powers the RC PCB directly with **3.3V** from the ESP32. While most remote control ICs have tolerances that allow for this minor voltage increase, proceed at your own risk. **Ensure the 100µF Elko is present** to help regulate current spikes and protect the remote's MCU.
+
 
 * **10-Channel LCD (Target Model)**: Displays channels `00` through `09`.
 * **15-Channel LCD**: Displays channels `00` through `15`.
-* **Model Note**: Also compatible with 5-channel LED variants as they share the same standby and wake-up logic.
+* **Model Note**: For 5-channel LED variants, the script can be used as the channel handling is identical; with the LCD replaced by LEDs 1 to 5 for the channel and one for operations.
 
 ### 📸 Build Gallery
 | Tasmota WebGUI (max_chan = 6) |
@@ -99,35 +100,11 @@ SetOption114 1  // Detach buttons from internal relays
 SetOption1 1    // Disable multipress
 ```
 
-### 🔄 Sync Routine
-Because the remote defaults to **Channel 01** upon power-up, the software ensures synchronization by cycling the power on boot:
-1. **Pulse HIGH** on GPIO 18 for 4 seconds (Cold Reset).
-2. **Pull LOW** on GPIO 18 to resume operation.
-3. Software sets `current_channel = 1` to match the hardware state.
-
-## 🔄 Synchronization Logic
-The `shutter.be` script manages the power state via **GPIO 18** to ensure Tasmota and the hardware are in sync:
-1.  **Hard Reset**: On startup, GPIO 18 is pulsed **HIGH** (Power OFF) for 4 seconds, then pulled **LOW** (Power ON).
-2.  **State Alignment**: This power cycle forces the remote to boot into its default state (Channel 01).
-3.  **Variable Sync**: The script sets `current_channel = 1` internally, ensuring the bridge starts with a 100% accurate channel count.
-
-## 🔄 Synchronization Logic
-The `shutter.be` script manages the power state via **GPIO 18**. 
-1.  **Hard Reset**: On startup, GPIO 18 is held LOW for 4 seconds, then pulled HIGH.
-2.  **State Alignment**: This power cycle forces the remote to boot into its default state (Channel 01).
-3.  **Variable Sync**: The script simultaneously sets its internal `current_channel` to `1`, ensuring software and hardware are perfectly synchronized.
-
 ### 🔄 Sync Logic (`shutter.be`)
 Because the remote is powered by **GPIO 18**, we can force a "Hard Sync":
 1. **Boot**: `gpio.digital_write(18, 0)` (Power OFF for 4 seconds).
 2. **Ready**: `gpio.digital_write(18, 1)` (Power ON).
 3. **Result**: The remote's MCU restarts at **Channel 01**. The Berry script sets `current_channel = 1`. We now have a guaranteed starting point without feedback.
-
-### ⚡ Power Management & Sync Logic (`shutter.be`)
-The `shutter.be` script utilizes **GPIO 18** to manage the remote's state. 
-1. **Cold Boot**: On Tasmota startup, GPIO 18 is pulled LOW for 4 seconds and then HIGH.
-2. **Hardware Sync**: This power cycle forces the remote to reset to its internal default (Channel 1).
-3. **Software Sync**: The Berry script initializes its internal `current_channel` variable to `1` simultaneously, ensuring the bridge and physical remote are perfectly aligned without needing a two-way RF link.
 
 ### ⚡ Power Management
 The remote is powered directly from the ESP32's 3.3V rail (or via the VCC GPIO through a transistor). The Berry script handles a **4-second cold boot** delay on startup to ensure the remote's LCD has stabilized before the first channel-sync pulse is sent.
