@@ -14,6 +14,8 @@ Designed for the common 5-button 433MHz remote family (OOK/FSK) found in the shu
 * **Channel 00 Note**: Channel 00 actuates all devices registered on the remote. The script excludes this feature to ensure only a single channel is operative.
 * **Model Note**: For 5-channel LED variants, the script can be used as the channel handling is identical; with the LCD replaced by LEDs 1 to 5 for the channel and one for operations.
 
+* Search for 'Funkhandsender PRIMERO' on the web for details
+
 ### 📸 Build Gallery
 | Tasmota WebGUI (max_chan = 6) |
 | :---: |
