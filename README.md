@@ -42,26 +42,40 @@ Because moving a specific shutter requires a sequence of pulses (Wake -> Step ->
 | 2 | **Step Right** | Pulse to move to the target channel. | 450ms |
 | 3 | **Direction** | Sends the `Up/Down` pulse. | 250ms |
 
-# 433MHz Multi-Channel Shutter Bridge for Tasmota (Berry)
+## 🔍 Details
 
-This project provides a professional-grade bridge between **Tasmota (ESP32)** and proprietary **433MHz RF** multi-channel shutter remotes. It uses the Berry scripting language to handle complex channel-stepping logic, hardware synchronization, and specialized functions like the "Shade" (intermediate) position.
+### GPIO Mapping
+The following pins are configured on the ESP32 to interface with the remote's micro-switches. By using **Open Drain**, we ensure the ESP32 doesn't interfere with the remote's battery or manual button presses.
 
+| Function | ESP32 GPIO | Tasmota Component | Description |
+| :--- | :---: | :--- | :--- |
+| **Up** | GPIO 13 | User (Output) | Simulates the 'Up' button press |
+| **Down** | GPIO 12 | User (Output) | Simulates the 'Down' button press |
+| **Stop** | GPIO 14 | User (Output) | Simulates 'Stop' (also used for Wake-up) |
+| **Step Left** | GPIO 27 | User (Output) | Decrements the channel |
+| **Step Right**| GPIO 26 | User (Output) | Increments the channel |
+| **Power/VCC** | GPIO 25 | User (Output) | Controls a MOSFET for hard power reset |
 
+### Tasmota Configuration
+Run these commands in the Tasmota Console to initialize the hardware environment. The `SetOption` commands ensure that the pins default to a "High Impedance" (disconnected) state so the remote can sleep properly.
 
-## 📟 Hardware Compatibility
-Designed for the common 5-button 433MHz remote family (OOK/FSK) found in the shutter industry.
+```tasmota
+// Set GPIOs to Open Drain Mode (1 = Pull-Up, 2 = Open Drain)
+// Replace <pin> with the GPIO numbers above
+GpioConfig 13, 2
+GpioConfig 12, 2
+GpioConfig 14, 2
+GpioConfig 27, 2
+GpioConfig 26, 2
+GpioConfig 25, 0 // VCC Control usually standard output
 
-* **10-Channel LCD (Target Model)**: Displays channels `00` through `09`.
-* **15-Channel LCD**: Displays channels `00` through `15`.
-* **Model Note**: Also compatible with 5-channel LED variants as they share the same standby and wake-up logic.
-* **Global Mode**: All variants feature a "00" channel to actuate all shutters at once. This script deliberately bypasses that mode to maintain precise individual state tracking.
+// Global Settings
+SetOption114 1 // Decouple Buttons from Relays if using internal pins
+SetOption1 1   // Restrict Button multipress
+```
 
-## 🛠 Technical Implementation
-
-### Open Drain (Open Gate) Parallel Wiring
-The ESP32 is wired in parallel with the physical buttons of the remote. This is made possible by configuring the ESP32 GPIOs as **Output Open Drain**. In this state, the ESP32 only pulls the line to Ground (simulating a button press) or remains high-impedance (floating). 
-
-This allows the physical buttons on the remote to remain fully functional alongside the ESP32, as the ESP32 effectively "disappears" from the circuit when not actively pulsing.
+### ⚡ Power Management
+The remote is powered directly from the ESP32's 3.3V rail (or via the VCC GPIO through a transistor). The Berry script handles a **4-second cold boot** delay on startup to ensure the remote's LCD has stabilized before the first channel-sync pulse is sent.
 
 ### Synchronization & Manual Use
 Since the remote buttons are still active, manual interaction is possible. However, because 433MHz is a one-way protocol, manual channel changes on the remote will not be detected by the ESP32. To maintain synchronization:
