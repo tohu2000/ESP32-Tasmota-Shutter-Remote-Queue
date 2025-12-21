@@ -58,12 +58,12 @@ The following diagram illustrates the direct connection between the ESP32 and th
 ```text
        ESP32 DEVKIT                433MHz REMOTE PCB
     ┌────────────────┐           ┌────────────────────┐
-    │        GPIO 18 ├───────────┤ VCC (+)            │
+    │        GPIO 18 ├──────┬────┤ GND (ON)           │
     │                │     ┌┴┐   │                    │
     │                │  100uF│   │  [Buttons to GND]  │
     │                │  (Elko)   │                    │
     │                │     └┬┘   │                    │
-    │            GND ├──────┴────┤ GND (-)            │
+    │           3.3V ├──────┴────┤ VCC (3.3)          │
     │                │           └──────────┬─────────┘
     │        GPIO 13 ├──────────────────────┤ UP
     │        GPIO 12 ├──────────────────────┤ DOWN
