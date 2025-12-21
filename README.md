@@ -7,9 +7,9 @@ This project provides a professional-grade bridge between **Tasmota (ESP32)** an
 ## 📟 Hardware Compatibility
 Designed for the common 5-button 433MHz remote family (OOK/FSK) found in the shutter industry.
 
-| Installed Hardware | Completed Build (Back) |
-| :---: | :---: |
-| <img src="rc_installed.jpg" width="50%"> | <img src="rc_closed_back_pack_neat.jpg" width="50%"> |
+| Installed Hardware | Completed Build (Back) | Web GUI |
+| :---: | :---: | :---: |
+| <img src="rc_installed.jpg" width="40%"> | <img src="rc_closed_back_pack_neat.jpg" width="40%"> | <img src="tasmota_web_gui.jpg" width="100%"> |
 
 * **10-Channel LCD (Target Model)**: Displays channels `00` through `09`.
 * **15-Channel LCD**: Displays channels `00` through `15`.
