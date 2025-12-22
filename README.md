@@ -7,7 +7,13 @@ Designed for the common 5-button 433MHz remote family (OOK/FSK) found in the shu
 
 > [!CAUTION]
 > **Voltage Warning:** The original remote is designed for a **3V CR2340 lithium cell**. This project powers the RC PCB directly with **3.3V** from the ESP32. While most remote control ICs have tolerances that allow for this minor voltage increase, proceed at your own risk. **Ensure the 100µF Elko is present** to help regulate current spikes and protect the remote's MCU.
+This project interfaces with consumer-grade RF remote controls that are originally designed for occasional manual operation. While the ESP32 allows for powerful automation, please keep the following in mind:
+* **Thermal Limits:** Proprietary 433MHz transmitters (especially high-gain 25mW versions) lack active cooling. They are intended for short bursts. "Spamming" commands or running them in tight software loops can cause the RF components to overheat and fail permanently.
+* **The "Hard" Power Factor:** Unlike a CR2430 battery which "sags" under stress, a 3.3V supply from an ESP32 is a "hard" power source. It will continue to drive current into the remote even if a software hang occurs, increasing the risk of hardware damage.
+* **Safety Watchdog:** The provided Berry script includes a safety watchdog to mitigate these risks. However, you should **avoid automation logic** (e.g., in Home Assistant or Node-RED) that triggers the remote repeatedly without significant cooldown periods.
+**Recommendation:** Limit high-frequency bursts and ensure your automation doesn't create infinite "ping-pong" loops between the bridge and your smart home controller.
 
+---
 
 * **10-Channel LCD (Target Model)**: Displays channels `00` through `09`.
 * **15-Channel LCD**: Displays channels `00` through `15`.
