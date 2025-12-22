@@ -133,52 +133,48 @@ If the remote is currently on **Channel 1** and is in **Sleep mode**, a single `
 | 5 | **Redundancy** | Sends a second `Down` pulse for reliability. | 550ms |
 
 ```
-                     ┌────────────────────────────────┐
-                     │       POWER ON / REBOOT        │
-                     │  (remote_hard_reset / Ch: 1)   │
-                     │  (MQTT Retain Cleanup sent)    │
-                     └──────────────┬─────────────────┘
-                                    │
-                                    ▼
-                     ┌────────────────────────────────┐
-                     │          STATE: SLEEP          │◄────────────────┐
-                     │   (is_sleeping: T | working: F)│                 │
-                     └──────────────┬─────────────────┘                 │
-                                    │                           [10s INACTIVITY]
-                          [NEW COMMAND RECEIVED]                        │
-                                    │                                   │
-                          ┌─────────┴─────────┐                         │
-               [Target == Current]    [Target != Current]               │
-                          │                   │                         │
-                  (LOG: Ignoring)             ▼                         │
-                          │          ┌─────────────────┐                │
-                          │          │  STATE: WAKING  │                │
-                          │          │ (Pulse STOP)    │                │
-                          │          └────────┬────────┘                │
-                          │                   │                         │
-                          ▼                   ▼                         │
-               ┌──────────────────────────────────────────────┐         │
-               │             STATE: PROCESSING                │         │
-               │      (working: T | last_act: updated)        │         │
-               └──────────────┬───────────────┬───────────────┘         │
-                              │               │                         │
-                     [Type: STEPPING]   [Type: MOVING]                  │
-                              │               │                         │
-                     (Iterate: Ch+/-)   (Pulse Up/Down)                 │
-                     (Update current)   (Wait for Move)                 │
-                              │               │                         │
-                              └───────┬───────┘                         │
-                                      │                                 │
-                              [CHECK QUEUE NEXT]                        │
-                                      │                                 │
-                            ┌─────────┴─────────┐                       │
-                      [More Items]        [Queue Empty]                 │
-                            │                   │                       │
-                            ▼                   ▼                       │
-                     (Process Next)      ┌───────────────┐              │
-                                         │  STATE: IDLE  │              │
-                                         │ (working: F)  ├──────────────┘
-                                         └───────────────┘
+       ┌─────────────────────────────────────────────────────────┐
+       │                  [ INITIALIZATION ]                     │
+       │           Hard Reset -> Channel 1 -> SLEEP              │
+       └───────────────────────────┬─────────────────────────────┘
+                                   │
+                                   ▼
+       ┌─────────────────────────────────────────────────────────┐
+  ┌───►│                   STATE: SLEEP                          │
+  │    │   (Remote Display OFF | working: NO | is_sleeping: YES) │
+  │    └───────────────────────────┬─────────────────────────────┘
+  │                                │
+  │                      [ NEW CMD RECEIVED ]
+  │                                │
+  │            (Action: Send STOP Pulse to wake remote)
+  │                                │
+  │                                ▼
+  │    ┌─────────────────────────────────────────────────────────┐
+  │    │                   STATE: WORKING                        │◄──┐
+  │    │   (Relays Clicking | working: YES | Queue Size > 0)     │   │
+  │    └──────┬────────────────────┬────────────────────┬────────┘   │
+  │           │                    │                    │            │
+  │     [ STEP CHANNEL ]     [ SEND MOVE CMD ]    [ NEW CMD IN ]     │
+  │     (Wait 1000ms)        (Wait 1200ms+)       (Add to Queue)     │
+  │           │                    │                    │            │
+  │           └───────────┬────────┴────────────────────┘            │
+  │                       │                                          │
+  │               [ IS QUEUE EMPTY? ] ─── NO (Process Next) ─────────┘
+  │                       │                                          │      
+  │                   YES (Finish)                                   │
+  │                       │                                          │
+  │                       ▼                                          │
+  │    ┌─────────────────────────────────────────────────────────┐   │
+  │    │                    STATE: IDLE                          │   │
+  │    │   (Remote Display ON | working: NO | is_sleeping: NO)   │   │
+  │    └──────┬────────────────────┬─────────────────────────────┘   │
+  │           │                    │                                 │
+  │    [ 10s PASSES ]      [ NEW CMD RECEIVED ]                      │
+  │           │                    │                                 │
+  │    (Auto-Sleep)        (Action: Add to Queue & START)            │
+  │           │                    │                                 │
+  └───────────┘                    └─────────────────────────────────┘ [ GO TO WORKING ]
+
 
 ```
 
