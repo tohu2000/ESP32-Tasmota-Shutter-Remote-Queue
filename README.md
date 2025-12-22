@@ -133,52 +133,52 @@ If the remote is currently on **Channel 1** and is in **Sleep mode**, a single `
 | 5 | **Redundancy** | Sends a second `Down` pulse for reliability. | 550ms |
 
 ```
-       ┌───────────────────────────────────────────┐
-       │             SYSTEM STARTUP                │
-       │        (remote_hard_reset())              │
-       └─────────────┬─────────────────────────────┘
-                     │
-                     ▼
-       ┌───────────────────────────────────────────┐
-       │             STATE: SLEEP                  │◄────────────────┐
-       │ (VCC: ON | current_chan: 1 | is_sleep: T) │                 │
-       └─────────────┬─────────────────────────────┘                 │
-                     │                                               │
-              [RECEIVE COMMAND]                                [10s INACTIVITY]
-                     │                                               │
-                     ▼                                               │
-       ┌───────────────────────────────────────────┐                 │
-       │             STATE: WAKING                 │                 │
-       │ (Pulse STOP | is_sleep: F | delay 800ms)  │                 │
-       └─────────────┬─────────────────────────────┘                 │
-                     │                                               │
-                     ▼                                               │
-       ┌───────────────────────────────────────────┐                 │
-       │            STATE: STEPPING                │◄──┐             │
-       │ (working: T | Pulse CH+/- | delay 450ms)  │   │             │
-       └─────────────┬─────────────────────────────┘   │(Loop until  │
-                     │                                 │ target_chan │
-              [TARGET REACHED]                         │ reached)    │
-                     │                                 └─────────────┘
-                     ▼                                               │
-       ┌───────────────────────────────────────────┐                 │
-       │             STATE: MOVING                 │                 │
-       │ (working: T | Pulse UP/DOWN/SHADE)        │                 │
-       └─────────────┬─────────────────────────────┘                 │
-                     │                                               │
-             [COMMAND FINISHED]                                      │
-                     │                                               │
-                     ▼                                               │
-       ┌───────────────────────────────────────────┐                 │
-       │              STATE: IDLE                  │                 │
-       │ (working: F | last_act: now | status: OK) ├─────────────────┘
-       └─────────────┬─────────────────────────────┘
-                     │
-              [NEW COMMAND RECEIVED]
-              (Check if target != current)
-                     │
-                     ▼
-             (Go to WAKING/STEPPING)
+                     ┌────────────────────────────────┐
+                     │       POWER ON / REBOOT        │
+                     │  (remote_hard_reset / Ch: 1)   │
+                     │  (MQTT Retain Cleanup sent)    │
+                     └──────────────┬─────────────────┘
+                                    │
+                                    ▼
+                     ┌────────────────────────────────┐
+                     │          STATE: SLEEP          │◄────────────────┐
+                     │   (is_sleeping: T | working: F)│                 │
+                     └──────────────┬─────────────────┘                 │
+                                    │                           [10s INACTIVITY]
+                          [NEW COMMAND RECEIVED]                        │
+                                    │                                   │
+                          ┌─────────┴─────────┐                         │
+               [Target == Current]    [Target != Current]               │
+                          │                   │                         │
+                  (LOG: Ignoring)             ▼                         │
+                          │          ┌─────────────────┐                │
+                          │          │  STATE: WAKING  │                │
+                          │          │ (Pulse STOP)    │                │
+                          │          └────────┬────────┘                │
+                          │                   │                         │
+                          ▼                   ▼                         │
+               ┌──────────────────────────────────────────────┐         │
+               │             STATE: PROCESSING                │         │
+               │      (working: T | last_act: updated)        │         │
+               └──────────────┬───────────────┬───────────────┘         │
+                              │               │                         │
+                     [Type: STEPPING]   [Type: MOVING]                  │
+                              │               │                         │
+                     (Iterate: Ch+/-)   (Pulse Up/Down)                 │
+                     (Update current)   (Wait for Move)                 │
+                              │               │                         │
+                              └───────┬───────┘                         │
+                                      │                                 │
+                              [CHECK QUEUE NEXT]                        │
+                                      │                                 │
+                            ┌─────────┴─────────┐                       │
+                      [More Items]        [Queue Empty]                 │
+                            │                   │                       │
+                            ▼                   ▼                       │
+                     (Process Next)      ┌───────────────┐              │
+                                         │  STATE: IDLE  │              │
+                                         │ (working: F)  ├──────────────┘
+                                         └───────────────┘
 
 ```
 
