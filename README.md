@@ -182,6 +182,7 @@ If the remote is currently on **Channel 1** and is in **Sleep mode**, a single `
 Integrate your shutters into Home Assistant using MQTT Template Covers and Sensors.
 
 ### 1. Covconfiguration.yaml to your `cocover:
+```yaml
   - platform: mqtt
     name: "Living Room Shutter"
     command_topic: "cmnd/shutter_controller/shutter_full"
@@ -194,8 +195,7 @@ Integrate your shutters into Home Assistant using MQTT Template Covers and Senso
     state_closed: "Sleep"
     optimistic: true
 ```
-
-### 2. Monitoring Sensors
+## 2. Monitoring Sensors
 Add these to track the active channel and bridge status in real-time.
 
 ```yaml
