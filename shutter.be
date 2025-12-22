@@ -42,6 +42,15 @@ class ShutterController
         tasmota.add_cmd('shutter_reset', / cmd, idx, payload -> self.remote_hard_reset())
         tasmota.add_cmd('shutter_full', / cmd, idx, payload -> self.full_command(payload))
         tasmota.add_cmd('shade', / cmd, idx, payload -> self.add_to_queue("move", "shade"))
+        
+        # NEU: MQTT Retain Cleanup beim Start
+        var topic = tasmota.cmd("Topic")['Topic']
+        if (topic != nil)
+            # Sendet leere Nachrichten mit Retain-Flag zum Löschen alter Broker-Daten
+            tasmota.publish("stat/" + topic + "/STATE", "", true)
+            tasmota.publish("stat/" + topic + "/CHANNEL", "", true)
+            if (self.debug) print("BRY: MQTT Retained-Messages bereinigt") end
+        end
 
         tasmota.add_driver(self)
         self.remote_hard_reset()
@@ -77,8 +86,9 @@ class ShutterController
         var topic = tasmota.cmd("Topic")['Topic']
         if (topic != nil)
             self.status_text = str(reason)
-            tasmota.publish("stat/" + topic + "/STATE", self.status_text, true)
-            tasmota.publish("stat/" + topic + "/CHANNEL", str(self.current_chan), true)
+            # Hier das 'false' am Ende ist entscheidend!
+            tasmota.publish("stat/" + topic + "/STATE", self.status_text, false)
+            tasmota.publish("stat/" + topic + "/CHANNEL", str(self.current_chan), false)
         end
     end
 
@@ -103,7 +113,22 @@ class ShutterController
     end
 
     def add_to_queue(q_type, payload)
-        self.queue.push([q_type, payload])
+        var val = payload
+        if (q_type == "chan")
+            val = int(payload)
+            # GUARD: Prevent feedback loops from Home Assistant/MQTT
+            # If the target channel is already the current channel, we do nothing.
+            if (val == self.current_chan)
+                if (self.debug) 
+                    print("BRY: Ignoring duplicate - already on channel " + str(val)) 
+                end
+                # Report "Done" to Tasmota/MQTT instead of "Error" to keep logs clean
+                tasmota.resp_cmnd_done() 
+                return
+            end
+        end
+
+        self.queue.push([q_type, val])
         if (!self.working)
             self.working = true
             tasmota.set_timer(0, / -> self.process_queue())
@@ -112,7 +137,9 @@ class ShutterController
     end
 
     def process_queue()
+        # Wenn die Schlange leer ist, beenden und Idle-Status senden
         if (size(self.queue) == 0)
+            if (self.debug) print("BRY: Queue abgearbeitet. Gehe in IDLE.") end
             self.working = false
             tasmota.set_timer(200, / -> self.publish_status(self.is_sleeping ? "Sleep" : "Idle"))
             return
@@ -122,44 +149,56 @@ class ShutterController
         var q_type = item[0]
         var payload = item[1]
         
+        # Verarbeitung Kanalwechsel
         if (q_type == "chan")
-            if (self.debug) print("BRY: Target Chan " + str(payload)) end
+            if (self.debug) print("BRY: Verarbeite Kanalwechsel zu " + str(payload)) end
             self.publish_status("Stepping")
-            self.move_to_channel(int(payload))
+            self.move_to_channel(payload)
+            # 1 Sekunde Pause nach der Fahrt, damit die Remote stabilisiert
             tasmota.set_timer(1000, / -> self.process_queue())
         end
         
+        # Verarbeitung Fahrbefehl
         if (q_type == "move")
             var cmd = str(payload)
-            if (self.debug) print("BRY: Command " + cmd) end
+            if (self.debug) print("BRY: Verarbeite Fahrbefehl: " + cmd) end
             self.publish_status("Moving")
             
-            var wait = 500 
+            # Wartezeit berechnen (Shade braucht länger als Standard Up/Down)
+            var wait = 1200 
             if (cmd == "shade")
-                wait = 6000 
-            end
-            if (cmd != "shade" && self.command_twice)
-                wait = 1200
+                wait = 6500 
             end
             
             self.do_move(cmd)
-            tasmota.set_timer(wait + 200, / -> self.process_queue())
+            tasmota.set_timer(wait, / -> self.process_queue())
         end
     end
 
     def move_to_channel(target)
         if (target < 1 || target > self.max_chan || target == self.current_chan) return end
-        self.keep_awake()
-        var diff = target - self.current_chan
-        var relay = self.r_left
-        if (diff > 0) relay = self.r_right end
         
-        var steps = (diff > 0) ? diff : -diff
-        for i:0..steps-1
+        self.keep_awake()
+        
+        while (self.current_chan != target)
+            var diff = target - self.current_chan
+            var relay = (diff > 0) ? self.r_right : self.r_left
+            
+            if (self.debug) print("BRY: Stepping " + str(self.current_chan) + " -> " + str(target)) end
+            
             self.pulse_raw(relay)
-            if (i < steps-1) tasmota.delay(self.delay_ms) end
+            
+            # WICHTIG: Kanal nach jedem Puls aktualisieren!
+            if (diff > 0) self.current_chan = self.current_chan + 1
+            else         self.current_chan = self.current_chan - 1
+            end
+            
+            self.last_act = tasmota.millis() # Sleep-Timer resetten
+            
+            if (self.current_chan != target) 
+                tasmota.delay(self.delay_ms) 
+            end
         end
-        self.current_chan = target
     end
 
     def do_move(cmd_str)
