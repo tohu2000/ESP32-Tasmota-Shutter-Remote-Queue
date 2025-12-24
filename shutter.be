@@ -1,64 +1,242 @@
 import string
 
 class ShutterController
-    # Variable declarations
-    var max_chan, current_chan, queue, working
+    var max_chan, current_chan, queue, working, remote_channels_total
     var pins, pin_power
-    var r_up, r_down, r_left, r_right, r_stop
-    var pulse_ms, delay_ms
+    var r_up, r_down, r_left, r_right, r_stop, r_set
+    var pulse_ms, delay_chan, delay_move
     var is_sleeping, last_act
     var status_text, command_twice, debug
 
     def init()
         import gpio
-        # Configuration
-        self.max_chan = 6            
-        self.pins = [17, 16, 27, 25, 26] # Up, Down, Left, Right, Stop
-        self.pin_power = 18              # Power control for Hard Reset
-        self.pulse_ms = 250
-        self.delay_ms = 450
+        # --- KONFIGURATION ---
+        self.remote_channels_total = 16 #00-15
+        self.max_chan = 15 #00 will be ignored           
+        # NEU: GPIO 33 als 6. Pin für die SET-Taste hinzugefügt
+        self.pins = [17, 16, 27, 25, 26, 33] 
+        self.pin_power = 18              
+        
+        # --- TIMING ---
+        self.pulse_ms = 120      
+        self.delay_chan = 150    
+        self.delay_move = 800    
+        
         self.status_text = "Idle"
-        self.command_twice = true 
+        self.command_twice = false 
         self.debug = true 
         
-        # Hardware Setup
         for p:self.pins
             gpio.pin_mode(p, gpio.OUTPUT_OPEN_DRAIN)
             gpio.digital_write(p, gpio.HIGH)
         end
         gpio.pin_mode(self.pin_power, gpio.OUTPUT)
         
-        # Internal mapping
-        self.r_up=0; self.r_down=1; self.r_left=2; self.r_right=3; self.r_stop=4
+        # NEU: r_set Mapping auf Index 5
+        self.r_up=0; self.r_down=1; self.r_left=2; self.r_right=3; self.r_stop=4; self.r_set=5
         self.last_act = tasmota.millis()
         self.queue = []
         self.working = false
         self.current_chan = 1
         self.is_sleeping = true
 
-        # Commands
+        # NEU: Pairing Befehl registriert
         tasmota.add_cmd('shutter_chan', / cmd, idx, payload -> self.add_to_queue("chan", payload))
         tasmota.add_cmd('shutter_go', / cmd, idx, payload -> self.add_to_queue("move", payload))
-        tasmota.add_cmd('shutter_reset', / cmd, idx, payload -> self.remote_hard_reset())
+        tasmota.add_cmd('shutter_reset', / -> self.remote_hard_reset())
+        tasmota.add_cmd('shutter_pair', / -> self.pair_sequence())
         tasmota.add_cmd('shutter_full', / cmd, idx, payload -> self.full_command(payload))
-        tasmota.add_cmd('shade', / cmd, idx, payload -> self.add_to_queue("move", "shade"))
         
-        # NEU: MQTT Retain Cleanup beim Start
-        var topic = tasmota.cmd("Topic")['Topic']
-        if (topic != nil)
-            # Sendet leere Nachrichten mit Retain-Flag zum Löschen alter Broker-Daten
-            tasmota.publish("stat/" + topic + "/STATE", "", true)
-            tasmota.publish("stat/" + topic + "/CHANNEL", "", true)
-            if (self.debug) print("BRY: MQTT Retained-Messages bereinigt") end
+        tasmota.add_driver(self)
+        self.remote_hard_reset() 
+        tasmota.set_timer(500, / -> self.monitor_loop())
+    end
+
+    # --- NEU: DIE PAIRING LOGIK ---
+    def pair_sequence()
+        if (self.debug) print("BRY: Pairing Sequence Start (SET-SET-DOWN)") end
+        self.last_act = tasmota.millis()
+        self.is_sleeping = false
+        self.publish_status("Pairing")
+        
+        try
+            # 1. SET Impuls (P-Taste)
+            self.pulse_raw(self.r_set)
+            tasmota.delay(800) # Pause damit FB senden kann
+            
+            # 2. SET Impuls (P-Taste)
+            self.pulse_raw(self.r_set)
+            tasmota.delay(800)
+            
+            # 3. DOWN Impuls (Abschluss)
+            self.pulse_raw(self.r_down)
+            
+            if (self.debug) print("BRY: Pairing Sequence Done") end
+            self.publish_status("Pair Done")
+        except .. as e, m
+            self.safe_state()
+            print("BRY Error in Pair: ", m)
+        end
+        tasmota.resp_cmnd_done()
+    end
+
+    def safe_state()
+        import gpio
+        for p:self.pins
+            gpio.digital_write(p, gpio.HIGH)
+        end
+    end
+
+    def remote_hard_reset()
+        import gpio
+        if (self.debug) print("BRY: Hard Reset - Sync to CH 1") end
+        gpio.digital_write(self.pin_power, 1)
+        tasmota.delay(4000)
+        gpio.digital_write(self.pin_power, 0)
+        tasmota.delay(2000)
+        self.safe_state()
+        self.current_chan = 1
+        self.is_sleeping = true
+        self.publish_status("Reset/Sleep")
+    end
+
+    def move_to_channel(target)
+        if (target < 0 || target > self.max_chan) return end
+        if (self.is_sleeping) self.keep_awake() end
+        
+        # Die Hardware-Basis für den Kreis (z.B. 16)
+        var mod = self.remote_channels_total 
+        
+        try
+            while (self.current_chan != target)
+                # Differenz im Hardware-Kreis berechnen
+                var diff = (target - self.current_chan + mod) % mod
+                
+                # Kürzester Weg: Wenn diff > halber Kreis, dann linksrum
+                var go_forward = (diff <= mod / 2)
+
+                var relay = go_forward ? self.r_right : self.r_left
+                self.pulse_raw(relay)
+
+                # Zähler-Update mit echtem Hardware-Rollover
+                if (go_forward)
+                    self.current_chan = (self.current_chan + 1) % mod
+                else
+                    self.current_chan = (self.current_chan - 1 + mod) % mod
+                end
+
+                self.last_act = tasmota.millis()
+                if (self.current_chan != target) 
+                    tasmota.delay(self.delay_chan) 
+                end
+            end
+            self.safe_state()
+        except .. as e, m
+            self.safe_state()
+        end
+    end
+
+    def do_move(cmd_str)
+        var c = string.tolower(cmd_str)
+        self.last_act = tasmota.millis()
+        self.is_sleeping = false 
+        try
+            if (c == "shade")
+                import gpio
+                gpio.digital_write(self.pins[self.r_stop], 0)
+                tasmota.set_timer(5500, / -> self.safe_state())
+                return 
+            end
+            var r = (c == "up") ? self.r_up : (c == "down" ? self.r_down : self.r_stop)
+            self.pulse_raw(r)
+            if (self.command_twice)
+                tasmota.set_timer(550, / -> self.pulse_raw(r))
+            end
+        except .. as e, m
+            self.safe_state()
+        end
+    end
+
+    def pulse_raw(idx)
+        import gpio
+        try
+            gpio.digital_write(self.pins[idx], 0)
+            tasmota.delay(self.pulse_ms)
+            gpio.digital_write(self.pins[idx], 1)
+        except .. as e, m
+            self.safe_state()
+        end
+    end
+
+    def keep_awake()
+        self.last_act = tasmota.millis()
+        if (self.is_sleeping)
+            self.pulse_raw(self.r_stop)
+            tasmota.delay(200)
+            self.is_sleeping = false
+        end
+    end
+
+    def monitor_loop()
+        var now = tasmota.millis()
+        import gpio
+        for p:self.pins
+            if (gpio.digital_read(p) == 0)
+                if (now - self.last_act > 10000)
+                    self.safe_state()
+                    print(f"BRY: WATCHDOG TRIPPED - Pin {p} HIGH")
+                end
+            end
+        end
+        if (!self.is_sleeping && (now - self.last_act > 8500))
+            self.is_sleeping = true
+            self.publish_status("Sleep")
+        end
+        tasmota.set_timer(500, / -> self.monitor_loop())
+    end
+
+def add_to_queue(q_type, payload)
+        # VERRIEGELUNG: Wenn das Script gerade klickt oder fährt, 
+        # wird absolut jeder neue Befehl ignoriert.
+        if (self.working)
+            if (self.debug) print("BRY: Ignoriere Befehl - System BUSY") end
+            return 
         end
 
-        tasmota.add_driver(self)
-        self.remote_hard_reset()
-        
-        if (self.debug) print("BRY: Shutter Controller Ready") end
-        
-        tasmota.add_rule("mqtt#connected", / -> self.publish_status("Sleep"))
-        tasmota.set_timer(500, / -> self.monitor_loop())
+        var val = payload
+        if (q_type == "chan")
+            val = int(payload)
+            # Wenn wir schon auf dem Kanal sind, gar nicht erst anfangen
+            if (val == self.current_chan) 
+                tasmota.resp_cmnd_done()
+                return 
+            end
+        end
+
+        # Jetzt sperren und ausführen
+        self.working = true
+        self.queue.push([q_type, val])
+        tasmota.set_timer(0, / -> self.process_queue())
+        tasmota.resp_cmnd_done()
+    end
+
+    def process_queue()
+        if (size(self.queue) == 0)
+            self.working = false
+            tasmota.set_timer(200, / -> self.publish_status(self.is_sleeping ? "Sleep" : "Idle"))
+            return
+        end
+        var item = self.queue.pop(0)
+        if (item[0] == "chan")
+            self.publish_status("Stepping")
+            self.move_to_channel(item[1])
+            tasmota.set_timer(300, / -> self.process_queue())
+        elif (item[0] == "move")
+            self.publish_status("Moving")
+            var wait = (item[1] == "shade") ? 6500 : self.delay_move 
+            self.do_move(str(item[1]))
+            tasmota.set_timer(wait, / -> self.process_queue())
+        end
     end
 
     def full_command(payload)
@@ -70,169 +248,15 @@ class ShutterController
         tasmota.resp_cmnd_done()
     end
 
-    def remote_hard_reset()
-        import gpio
-        if (self.debug) print("BRY: Hard Resetting Remote...") end
-        gpio.digital_write(self.pin_power, 1)
-        tasmota.delay(4000)
-        gpio.digital_write(self.pin_power, 0)
-        tasmota.delay(1500)
-        self.current_chan = 1
-        self.is_sleeping = true
-        self.publish_status("Sleep")
-    end
-
     def publish_status(reason)
         var topic = tasmota.cmd("Topic")['Topic']
         if (topic != nil)
             self.status_text = str(reason)
-            # Hier das 'false' am Ende ist entscheidend!
             tasmota.publish("stat/" + topic + "/STATE", self.status_text, false)
             tasmota.publish("stat/" + topic + "/CHANNEL", str(self.current_chan), false)
         end
     end
 
-    def monitor_loop()
-        var now = tasmota.millis()
-        if (!self.is_sleeping && (now - self.last_act > 9950))
-            self.is_sleeping = true
-            self.publish_status("Sleep")
-            if (self.debug) print("BRY: Auto-Sleep triggered") end
-        end
-        tasmota.set_timer(500, / -> self.monitor_loop())
-    end
-
-    def keep_awake()
-        self.last_act = tasmota.millis()
-        if (self.is_sleeping)
-            if (self.debug) print("BRY: Wake-up pulse") end
-            self.pulse_raw(self.r_stop)
-            tasmota.delay(800)
-            self.is_sleeping = false
-        end
-    end
-
-    def add_to_queue(q_type, payload)
-        var val = payload
-        if (q_type == "chan")
-            val = int(payload)
-            # GUARD: Prevent feedback loops from Home Assistant/MQTT
-            # If the target channel is already the current channel, we do nothing.
-            if (val == self.current_chan)
-                if (self.debug) 
-                    print("BRY: Ignoring duplicate - already on channel " + str(val)) 
-                end
-                # Report "Done" to Tasmota/MQTT instead of "Error" to keep logs clean
-                tasmota.resp_cmnd_done() 
-                return
-            end
-        end
-
-        self.queue.push([q_type, val])
-        if (!self.working)
-            self.working = true
-            tasmota.set_timer(0, / -> self.process_queue())
-        end
-        tasmota.resp_cmnd_done()
-    end
-
-    def process_queue()
-        # Wenn die Schlange leer ist, beenden und Idle-Status senden
-        if (size(self.queue) == 0)
-            if (self.debug) print("BRY: Queue abgearbeitet. Gehe in IDLE.") end
-            self.working = false
-            tasmota.set_timer(200, / -> self.publish_status(self.is_sleeping ? "Sleep" : "Idle"))
-            return
-        end
-
-        var item = self.queue.pop(0)
-        var q_type = item[0]
-        var payload = item[1]
-        
-        # Verarbeitung Kanalwechsel
-        if (q_type == "chan")
-            if (self.debug) print("BRY: Verarbeite Kanalwechsel zu " + str(payload)) end
-            self.publish_status("Stepping")
-            self.move_to_channel(payload)
-            # 1 Sekunde Pause nach der Fahrt, damit die Remote stabilisiert
-            tasmota.set_timer(1000, / -> self.process_queue())
-        end
-        
-        # Verarbeitung Fahrbefehl
-        if (q_type == "move")
-            var cmd = str(payload)
-            if (self.debug) print("BRY: Verarbeite Fahrbefehl: " + cmd) end
-            self.publish_status("Moving")
-            
-            # Wartezeit berechnen (Shade braucht länger als Standard Up/Down)
-            var wait = 1200 
-            if (cmd == "shade")
-                wait = 6500 
-            end
-            
-            self.do_move(cmd)
-            tasmota.set_timer(wait, / -> self.process_queue())
-        end
-    end
-
-    def move_to_channel(target)
-        if (target < 1 || target > self.max_chan || target == self.current_chan) return end
-        
-        self.keep_awake()
-        
-        while (self.current_chan != target)
-            var diff = target - self.current_chan
-            var relay = (diff > 0) ? self.r_right : self.r_left
-            
-            if (self.debug) print("BRY: Stepping " + str(self.current_chan) + " -> " + str(target)) end
-            
-            self.pulse_raw(relay)
-            
-            # WICHTIG: Kanal nach jedem Puls aktualisieren!
-            if (diff > 0) self.current_chan = self.current_chan + 1
-            else         self.current_chan = self.current_chan - 1
-            end
-            
-            self.last_act = tasmota.millis() # Sleep-Timer resetten
-            
-            if (self.current_chan != target) 
-                tasmota.delay(self.delay_ms) 
-            end
-        end
-    end
-
-    def do_move(cmd_str)
-        self.keep_awake()
-        var c = string.tolower(str(cmd_str))
-        import gpio
-        
-        # Flat logic: handle 'shade' and exit
-        if (c == "shade")
-            if (self.debug) print("BRY: Shade hold start") end
-            gpio.digital_write(self.pins[self.r_stop], 0)
-            tasmota.set_timer(5500, / -> gpio.digital_write(self.pins[self.r_stop], 1))
-            return 
-        end
-        
-        # Handle standard movement
-        var r = self.r_stop
-        if (c == "up")   r = self.r_up   end
-        if (c == "down") r = self.r_down end
-        
-        self.pulse_raw(r)
-        
-        if (self.command_twice)
-            tasmota.set_timer(550, / -> self.pulse_raw(r))
-        end
-    end
-
-    def pulse_raw(idx)
-        import gpio
-        gpio.digital_write(self.pins[idx], 0)
-        tasmota.delay(self.pulse_ms)
-        gpio.digital_write(self.pins[idx], 1)
-    end
-    
     def json_append()
         var msg = ",\"Shutter\":{\"State\":\"" + self.status_text + "\",\"Channel\":" + str(self.current_chan) + "}"
         tasmota.response_append(msg)

@@ -17,16 +17,21 @@ class ShutterWebUI : Driver
         h += "</div>"
         
         h += "<div style='margin-bottom:4px;font-size:90%;font-weight:bold;'>Channel Selection</div>"
-        h += "<div style='text-align:center;'>"
+        h += "<div style='text-align:center;max-width:280px;margin:0 auto;'>"
         webserver.content_send(h)
 
-        # Kanäle fest auf 6
-        for i:1..6
-            var btn = "<button style='width:30%;margin:2px;' onclick='la(\"&sh_ch=" + str(i) + "\");'>CH " + str(i) + "</button>"
+        # Kanäle dynamisch - kompakte Buttons ohne feste Breite
+        var max = 6
+        if global.shutter != nil && shutter.max_chan != nil
+            max = shutter.max_chan
+        end
+
+        for i:1..max
+            # Nutzt Auto-Breite und kleineres Padding für schmales Design
+            var btn = "<button style='width:auto;min-width:45px;margin:2px;padding:4px 8px;font-size:14px;' onclick='la(\"&sh_ch=" + str(i) + "\");'>" + str(i) + "</button>"
             webserver.content_send(btn)
         end
         
-        # Live-Update Script (alle 2 Sek), damit die Werte oben springen
         webserver.content_send("<script>setInterval(function(){if(!document.hidden){la('');}},2000);</script>")
         webserver.content_send("</div>")
     end
