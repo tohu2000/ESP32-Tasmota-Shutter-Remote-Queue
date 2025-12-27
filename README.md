@@ -18,7 +18,7 @@ This project interfaces with consumer-grade RF remote controls that are original
 * **10-Channel LCD (Target Model)**: Displays channels `00` through `09`.
 * **15-Channel LCD**: Displays channels `00` through `15`.
 * **Channel 00 Note**: Channel 00 actuates all devices registered on the remote. The script excludes this feature to ensure only a single channel is operative.
-* **Model Note**: For 5-channel LED variants, the script can be used as the channel handling is identical; with the LCD replaced by LEDs 1 to 5 for the channel and one for operations.
+* **Model Note**: For 5-channel LED variants, the script can be used as the channel handling is identical; with the LCD replaced by LEDs 1 to 5 for the channel and one for operations. However, the buttons do **not** switch against ground potential (as for 09 and 15 channel LCD remotes), hence optokopplers are required in such a build
 
 * Search for 'Funkhandsender PRIMERO' on the web for details
 
