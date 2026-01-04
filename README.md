@@ -3,10 +3,10 @@
 This project provides a professional-grade bridge between **Tasmota (ESP32)** and proprietary **433MHz RF** multi-channel shutter remotes. It uses the Berry scripting language to handle complex channel-stepping logic, hardware synchronization, and specialized functions like the "Shade" (intermediate) position.
 
 ## 📟 Hardware Compatibility
-Designed for the common 5-button 433MHz remote family (OOK/FSK) found in the shutter industry.
+Designed for the common 5-button (up,down, channel left and right, stop) 433MHz remote family (OOK/FSK) found in the shutter industry.
 
 > [!CAUTION]
-> **Voltage Warning:** The original remote is designed for a **3V CR2340 lithium cell**. This project powers the RC PCB directly with **3.3V** from the ESP32. While most remote control ICs have tolerances that allow for this minor voltage increase, proceed at your own risk. **Ensure the 100µF Elko is present** to help regulate current spikes and protect the remote's MCU.
+> **Voltage Warning:** The original remote is designed for a **3V CR2430 lithium cell**. This project powers the RC PCB directly with **3.3V** from the ESP32. While most remote control ICs have tolerances that allow for this minor voltage increase, proceed at your own risk. **Ensure the 100µF Elko is present** to help regulate current spikes and protect the remote's MCU.
 This project interfaces with consumer-grade RF remote controls that are originally designed for occasional manual operation. While the ESP32 allows for powerful automation, please keep the following in mind:
 * **Thermal Limits:** Proprietary 433MHz transmitters (especially high-gain 25mW versions) lack active cooling. They are intended for short bursts. "Spamming" commands or running them in tight software loops can cause the RF components to overheat and fail permanently.
 * **The "Hard" Power Factor:** Unlike a CR2430 battery which "sags" under stress, a 3.3V supply from an ESP32 is a "hard" power source. It will continue to drive current into the remote even if a software hang occurs, increasing the risk of hardware damage.
@@ -17,8 +17,10 @@ This project interfaces with consumer-grade RF remote controls that are original
 
 * **10-Channel LCD (Target Model)**: Displays channels `00` through `09`.
 * **15-Channel LCD**: Displays channels `00` through `15`.
-* **Channel 00 Note**: Channel 00 actuates all devices registered on the remote. The script excludes this feature to ensure only a single channel is operative.
-* **Model Note**: For 5-channel LED variants, the script can be used as the channel handling is identical; with the LCD replaced by LEDs 1 to 5 for the channel and one for operations. However, the buttons do **not** switch against ground potential (as for 09 and 15 channel LCD remotes), hence optokopplers are required in such a build
+* **Channel `00` Note**: Channel 00 actuates all devices registered on the remote.
+
+* **Model Note (5-Channel LED Variants)**: The script is fully compatible with 5-channel LED models, as the channel-stepping logic is identical (LCD is replaced by 7 LEDs 00 – 05 and one operation LED). 
+**Wiring Requirement:** Unlike the 10- and 15-channel LCD remotes, the buttons on most 5-channel LED variants do **not** switch against Ground potential. To interface these models with an ESP32, **optocouplers** (e.g., PC817) are required for each control line to ensure electrical isolation and proper signal switching.
 
 * Search for 'Funkhandsender PRIMERO' on the web for details
 
@@ -39,6 +41,40 @@ This project interfaces with consumer-grade RF remote controls that are original
 | **Capacitor Mod** | **Final Assembly** |
 | <img src="rc_open_elko_wired.jpg" width="40%"> | <img src="rc_closed_back_pack.jpg" width="40%"> |
 
+
+
+
+## 🕹️ Command Reference
+
+You can trigger these commands via the Tasmota Console, HTTP-API, or MQTT.
+
+| Command | Payload Example | Description | Pulse Sequence (Internal) |
+| :--- | :--- | :--- | :--- |
+| **`chan`** | `5` | Selects a specific channel without moving. | `Wake -> Step to 5` |
+| **`goup`** | *(none)* | Moves the shutter on the **current** channel up. | `Wake -> Up-Pulse` |
+| **`godown`** | *(none)* | Moves the shutter on the **current** channel down. | `Wake -> Down-Pulse` |
+| **`stop`** | *(none)* | Sends a stop pulse on the **current** channel. | `Wake -> Stop-Pulse` |
+| **`goshade`** | *(none)* | Triggers the intermediate "Shade" position. | `Wake -> Long-Stop (4.5s)` |
+| **`chanandgo`** | `3,down` | **Main Command:** Changes to channel and moves: `up` `down` `stop` `shade` | `Wake -> Step to 3 -> Down` |
+| **`hardreset`**| *(none)* | Perfroms a 4s power cycle via GPIO 18. | `Power OFF -> Power ON` |
+| **`unlock`** | `1` | Clears Failsafe state and sets current channel. | `Software Reset only` |
+
+### Usage Examples
+
+**Via Tasmota Console:**
+```tasmota
+chanandgo 12,up    // Moves shutter on channel 12 up
+goshade            // Triggers shade for the currently active channel
+hardreset          // Forces remote to Channel 01 if sync is lost
+````
+
+Via MQTT: Topic: 
+`cmnd/your_device_topic/chanandgo`
+
+`Payload: 7,down`
+
+Via HTTP-API: `http://<IP>/cmnd?cmnd=chanandgo%205,shade`
+
 ## 🛠 Technical Implementation
 
 ### Open Drain (Open Gate) Parallel Wiring
@@ -46,7 +82,7 @@ The ESP32 is wired in parallel with the physical buttons of the remote. This is 
 
 ### Synchronization & Manual Use
 * **Hard Reset**: The ESP32 controls the remote's power (VCC). On boot, it performs a 4-second power cycle to force the remote back to its default starting channel.
-* **Manual Parity**: Physical buttons remain functional thanks to the Open Drain configuration.
+* **Manual Parity**: Physical buttons remain functional thanks to the Open Drain configuration. 330 Ohm resistors protect GPIOs if GND and remote is actuated Vcc.
 
 ## ⛓️ Sequential Command Queuing
 
@@ -64,7 +100,7 @@ Because moving a specific shutter requires a sequence of pulses (Wake -> Step ->
 In this setup, GPIO 18 acts as the 3.3V power source for the remote. Driving the pin LOW cuts power to the device, allowing for a hard hardware reset.
 
 ```text
-       ESP32 DEVKIT                433MHz REMOTE PCB
+       ESP32 DEVKIT                  433MHz REMOTE PCB
     ┌────────────────┐           ┌────────────────────┐
     │        GPIO 18 ├──────┬────┤ VCC (+)            │
     │                │     ┌┴┐   │                    │
@@ -73,11 +109,12 @@ In this setup, GPIO 18 acts as the 3.3V power source for the remote. Driving the
     │                │     └┬┘   │                    │
     │            GND ├──────┴────┤ GND (-)            │
     │                │           └──────────┬─────────┘
-    │        GPIO 13 ├──────────────────────┤ UP
-    │        GPIO 12 ├──────────────────────┤ DOWN
-    │        GPIO 14 ├──────────────────────┤ STOP
-    │        GPIO 27 ├──────────────────────┤ CH (-)
-    │        GPIO 26 ├──────────────────────┤ CH (+)
+    │                │    330R              │
+    │        GPIO 13 ├────[###]─────────────┤ UP
+    │        GPIO 12 ├────[###]─────────────┤ DOWN
+    │        GPIO 14 ├────[###]─────────────┤ STOP
+    │        GPIO 27 ├────[###]─────────────┤ CH (-)
+    │        GPIO 26 ├────[###]─────────────┤ CH (+)
     └────────────────┘           
     (All Buttons: GPIO Open Drain | Power: Active-Low for Reset)
 ```
@@ -149,13 +186,17 @@ If the remote is currently on **Channel 1** and is in **Sleep mode**, a single `
   ┌───►│                   STATE: SLEEP                          │
   │    │   (Remote Display OFF | working: NO | is_sleeping: YES) │
   │    └───────────────────────────┬─────────────────────────────┘
-  │                                │
-  │                      [ NEW CMD RECEIVED ]
-  │                                │
-  │            (Action: Send STOP Pulse to wake remote)
-  │                                │
-  │                                ▼
-  │    ┌─────────────────────────────────────────────────────────┐
+  │            ▲                   │
+  │            │         [ MONITOR LOOP POLLING ]
+  │      (Auto-Sleep)    - Every 100ms (poll_idle)
+  │            │         - Checks for Button Press (Manual)
+  │            │                   │
+  │      [ 7s PASSES ]      [ NEW CMD RECEIVED ]
+  │            │                   │
+  │            │        (Action: Send STOP Pulse to wake)
+  │            │                   │
+  │            │                   ▼
+  │    ┌───────┴─────────────────────────────────────────────────┐
   │    │                   STATE: WORKING                        │◄──┐
   │    │   (Relays Clicking | working: YES | Queue Size > 0)     │   │
   │    └──────┬────────────────────┬────────────────────┬────────┘   │
@@ -173,14 +214,21 @@ If the remote is currently on **Channel 1** and is in **Sleep mode**, a single `
   │    ┌─────────────────────────────────────────────────────────┐   │
   │    │                    STATE: IDLE                          │   │
   │    │   (Remote Display ON | working: NO | is_sleeping: NO)   │   │
-  │    └──────┬────────────────────┬─────────────────────────────┘   │
-  │           │                    │                                 │
-  │    [ 10s PASSES ]      [ NEW CMD RECEIVED ]                      │
-  │           │                    │                                 │
-  │    (Auto-Sleep)        (Action: Add to Queue & START)            │
-  │           │                    │                                 │
-  └───────────┘                    └─────────────────────────────────┘ [ GO TO WORKING ]
+  │    └──────┬────────────────────┬───────────┬─────────────────┘   │
+  │           │                    │           │                     │
+  │ [ MONITOR LOOP ]        [ NEW CMD IN ]     │                     │
+  │ - Every 10ms (active)   (Add to Queue)     │                     │
+  │ - Manual Interaction?          │           │                     │
+  │           │                    ▼           │                     │
+  └───────────┴─────────────[ GO TO WORKING ]  │                     │
+                                   ▲           │                     │
+                                   └───────────┘                     │
+             [ MANUAL INTERACTION DETECTED ]                         │
+             - Interrupts Queue / Sets Needs_Reset                   │
+             - Updates current_chan via Polling                      │
+             └───────────────────────────────────────────────────────┘
 
+NOTE: monitor loop tracks chan buttons and updates self.current_chan
 
 ```
 
@@ -191,9 +239,9 @@ Integrate your shutters into Home Assistant using MQTT Template Covers and Senso
 ```yaml
   - platform: mqtt
     name: "Living Room Shutter"
-    command_topic: "cmnd/shutter_controller/shutter_full"
+    command_topic: "cmnd/shutter_controller/chanandgo"
     state_topic: "stat/shutter_controller/STATE"
-    availability_topic: "tele/shutter_controller/LWT"
+    availability_topic: "tele/shutter_controller/chanandgo"
     payload_open: "3,up"
     payload_close: "3,down"
     payload_stop: "3,stop"
@@ -223,7 +271,7 @@ script:
     sequence:
       - service: mqtt.publish
         data:
-          topic: "cmnd/shutter_controller/shutter_full"
+          topic: "cmnd/shutter_controller/chanandgo"
           payload: "3,shade"
 ```
 
