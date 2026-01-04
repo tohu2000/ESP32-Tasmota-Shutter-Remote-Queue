@@ -195,38 +195,35 @@ If the remote is currently on **Channel 1** and is in **Sleep mode**, a single `
   │            │                   │
   │            │        (Action: Send STOP Pulse to wake)
   │            │                   │
-  │            │                   ▼
-  │    ┌───────┴─────────────────────────────────────────────────┐
-  │    │                   STATE: WORKING                        │◄──┐
-  │    │   (Relays Clicking | working: YES | Queue Size > 0)     │   │
-  │    └──────┬────────────────────┬────────────────────┬────────┘   │
-  │           │                    │                    │            │
-  │     [ STEP CHANNEL ]     [ SEND MOVE CMD ]    [ NEW CMD IN ]     │
-  │     (Wait 1000ms)        (Wait 1200ms+)       (Add to Queue)     │
-  │           │                    │                    │            │
-  │           └───────────┬────────┴────────────────────┘            │
-  │                       │                                          │
-  │               [ IS QUEUE EMPTY? ] ─── NO (Process Next) ─────────┘
-  │                       │                                          │      
-  │                   YES (Finish)                                   │
-  │                       │                                          │
-  │                       ▼                                          │
-  │    ┌─────────────────────────────────────────────────────────┐   │
-  │    │                    STATE: IDLE                          │   │
-  │    │   (Remote Display ON | working: NO | is_sleeping: NO)   │   │
-  │    └──────┬────────────────────┬───────────┬─────────────────┘   │
-  │           │                    │           │                     │
-  │ [ MONITOR LOOP ]        [ NEW CMD IN ]     │                     │
-  │ - Every 10ms (active)   (Add to Queue)     │                     │
-  │ - Manual Interaction?          │           │                     │
-  │           │                    ▼           │                     │
-  └───────────┴─────────────[ GO TO WORKING ]  │                     │
-                                   ▲           │                     │
-                                   └───────────┘                     │
-             [ MANUAL INTERACTION DETECTED ]                         │
-             - Interrupts Queue / Sets Needs_Reset                   │
-             - Updates current_chan via Polling                      │
-             └───────────────────────────────────────────────────────┘
+  │            │                   │
+  │            │                   │                             
+  │            │                   ▼                             
+  │    ┌─────────────────────────────────────────────────────────┐◄────┐
+  │    │                   STATE: WORKING                        │◄──┐ │
+  │    │   (Relays Clicking | working: YES | Queue Size > 0)     │   │ │
+  │    └──────┬────────────────────┬────────────────────┬────────┘   │ │
+  │           │                    │                    │            │ │
+  │     [ STEP CHANNEL ]     [ SEND MOVE CMD ]    [ NEW CMD IN ]     │ │
+  │     (Wait 1000ms)        (Wait 1200ms+)       (Add to Queue)     │ │
+  │           │                    │                    │            │ │
+  │           └───────────┬────────┴────────────────────┘            │ │
+  │                       │                                          │ │
+  │               [ IS QUEUE EMPTY? ] ─── NO (Process Next) ─────────┘ │
+  │                       │                                            │
+  │                   YES (Finish)                                     │
+  │                       │                                            │
+  │                       ▼                                            │
+  │    ┌─────────────────────────────────────────────────────────┐     │
+  │    │                    STATE: IDLE                          │     │
+  │    │   (Remote Display ON | working: NO | is_sleeping: NO)   │     │
+  │    └──────┬───────────────────────────────────────┬──────────┘     │
+  │           │                                       │                │
+  │     [ 7s PASSES ]                            [ NEW CMD IN ]        │
+  │           │                                  (Add to Queue)        │
+  │           │                                         │              │
+  │           ▼                                         └──────────────┘
+  └─────[ GO TO SLEEP ]              
+
 
 NOTE: monitor loop tracks chan buttons and updates self.current_chan
 
