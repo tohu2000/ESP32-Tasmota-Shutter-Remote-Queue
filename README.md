@@ -229,7 +229,41 @@ NOTE: monitor loop tracks chan buttons and updates self.current_chan
 
 ```
 
-🏠 Home Assistant Integrati
+
+## 🛡️ Safety & Failsafe Mechanisms
+
+Um die empfindliche 433MHz-Hardware zu schützen und eine dauerhafte Synchronisation zu gewährleisten, implementiert das Berry-Script mehrere Sicherheitsebenen:
+
+### 1. Hardware Protection (Physical Layer)
+Die ESP32-GPIOs sind als **Open Drain** konfiguriert (sie ziehen nur gegen GND). Als zusätzliche "Versicherung" sind **330 Ω Widerstände** in jeder Steuerleitung verbaut. Diese schützen den ESP32 und die MCU der Fernbedienung vor Kurzschlüssen oder Fehlkonfigurationen (z. B. wenn ein Pin während eines Tasmota-Updates kurzzeitig auf "Push-Pull" geht).
+
+### 2. Software Watchdog (Stuck-Pin Protection)
+Der `monitor_loop` überwacht permanent den Zustand aller Steuerleitungen:
+* **Manual Override:** Erkennt, wenn eine Taste länger als 400ms gedrückt wird (Desync-Gefahr).
+* **Stuck-Pin Lock:** Bleibt ein Pin länger als **10 Sekunden** am Stück auf LOW (aktiv), löst das Script einen Failsafe aus. Dies verhindert das Durchbrennen der Sende-Einheit bei einem Software-Hänger.
+
+### 3. Rate Limiting (Anti-Spam / Thermal Protection)
+Proprietäre 433MHz-Sender sind nicht für Dauerbetrieb ausgelegt. Um thermische Schäden zu vermeiden, überwacht das Script die Sendefrequenz:
+* **Pulse Counter:** Das Script zählt jeden gesendeten Impuls.
+* **Limit:** Wenn mehr als **80 Impulse innerhalb von 60 Sekunden** registriert werden (typisch für fehlerhafte Automatisierungsschleifen in Home Assistant), geht die Bridge sofort in den Lock-Modus (`FAILSAFE: Excessive Pulsing`).
+* **Cooldown:** Nach 60 Sekunden wird der Zähler automatisch zurückgesetzt.
+
+### 4. Hard Sync (Power-Cycle Recovery)
+Da 433MHz ein Ein-Weg-Protokoll ohne Rückkanal ist, kann die Synchronisation bei intensiver manueller Nutzung verloren gehen:
+* **Hard Reset:** Über **GPIO 18** kann das Script die Stromversorgung der Fernbedienung kappen. Dies erzwingt einen Neustart der Fernbedienung auf **Kanal 01**.
+* **Unlock Command:** Mit dem Befehl `unlock <channel>` kann ein Failsafe-Zustand manuell aufgehoben und die Software wieder mit dem Display der Fernbedienung synchronisiert werden.
+
+---
+### 💡 Status LED Indicators
+The onboard LED provides real-time feedback on the bridge's health and synchronization status:
+
+* **Fast Blinking (400ms):** **Manual Interaction Detected.** A physical button press was registered. Please check if the software channel still matches the remote's display.
+* **Slow Blinking (1500ms):** **Failsafe Active.** The bridge has locked itself because a pin is stuck LOW or the transmission rate limit (80 pulses/min) was exceeded.
+
+> [!TIP]
+> Use the `unlock <channel>` command to clear the failsafe once the issue is resolved.
+
+## 🏠 Home Assistant Integrati
 Integrate your shutters into Home Assistant using MQTT Template Covers and Sensors.
 
 ### 1. Covconfiguration.yaml to your `cocover:
