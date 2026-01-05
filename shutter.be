@@ -26,10 +26,11 @@ class ShutterController : Driver
     var execute_auto_reset, fb_timeout
     var mqtt_topic
     var msg 
-    var ignore_echo
+    var ignore_echo 
     var attention
     var publish
     var log
+    var monitor
 
     # -------------------------------------------------------------------------
     # Driver Initialization
@@ -37,14 +38,14 @@ class ShutterController : Driver
     def init()
         self.mqtt_topic = tasmota.cmd("Topic")['Topic']
         self.boot_time = tasmota.millis()
-        self.ignore_echo = false
+        self.ignore_echo = false    # Remainder of a C++ custom Tasmota FW IRQ driver exploration / ignore
 
         # Polling of user activities (consider 330 Ohm resistors to protect GPIOs)
-        self.debounce_ms = 5        # Debouncing / Entprellungszeit
-        self.desync_ms = 400        # Threshold to detect manual channel cycling on remote
+        self.debounce_ms = 50        # Debouncing / Entprellungszeit
+        self.desync_ms = 500        # Threshold to detect manual channel cycling on remote
         self.poll_active = 10       # Fast polling interval when active (Sleep 0)
         self.poll_idle = 100        # Slow polling interval when idle (Sleep 50)
-        self.fb_timeout = 7000      # Time before remote enters standby
+        self.fb_timeout = 7000      # Time before remote enters standby (Remote awake time before sleep)
  
         # Script timings acting on the remote hardware
         self.pulse_high_ms = 350    # Standard pulse duration (High)
@@ -54,12 +55,13 @@ class ShutterController : Driver
         self.post_delay = 300       # Pause after command execution
         self.delay_shade = 4500     # Duration for "Shade" (long press)
         self.wake_up = 300          # Duration for wake-up pulse
-        self.attention = false      # CPU/Power management flag
+        self.attention = false      # CPU/Power management flag - true = Sleep 0, false = Sleep 50
 
         # Debugging flags
-        self.publish = true         # Enable/Disable MQTT status updates
-        self.log = true             # Enable/Disable console debugging
-        
+        self.publish = true         # Enable/Disable MQTT status updates (disable only for debugging)
+        self.log = true             # Enable/Disable console debugging (disable for regular use)
+
+
         # Localized status and error messages
         self.msg = {
             "boot":    "Safe Boot",
@@ -68,7 +70,7 @@ class ShutterController : Driver
             "stuck":   "FAILSAFE (Stuck Pin)",
             "user":    "FAILSAFE (User Intervention)",
             "standby": "Standby",
-            "manual":  "SYNC REQ: Manual Override",
+            "manual":  "User may caused de-sync",
             "ready":   "Idle",
             "excess":  "FAILSAFE (Excessive Pulsing)",
             "err_gpio": "GPIO Error: ",
@@ -85,7 +87,7 @@ class ShutterController : Driver
         self.execute_auto_reset = false         # In case of failsafe conditions detected, if true hardreset
         self.remote_channels_total = 16         # total number of remote states (00 - 15)
         self.max_chan = 15                      # You can limit number of channels if not used eg (00 - 06)
-        self.pins = [17, 16, 27, 25, 26, 33]    # Up, Down, Left, Right, Stop, Set
+        self.pins = [17, 16, 27, 25, 26, 33]    # Up, Down, Left, Right, Stop, Set - ignore Set / development
         self.pin_power = 18                     # Remote battery/power supply control
         self.pin_led = 2                        # Status LED
         self.status_text = self.msg["boot"]
@@ -95,7 +97,7 @@ class ShutterController : Driver
 
         tasmota.cmd("Sleep 50") # Default energy saving mode
         
-        # Configure GPIOs as Open Drain to simulate button presses
+        # Configure GPIOs as Open Drain to simulate button presses / protect with 330 Ohm in series
         for p:self.pins 
             gpio.pin_mode(p, gpio.OUTPUT_OPEN_DRAIN)
             gpio.digital_write(p, gpio.HIGH)
@@ -126,8 +128,9 @@ class ShutterController : Driver
         tasmota.add_cron("0 0 3 * * 0", / -> self.weekly_sync())
         
         tasmota.add_driver(self)
-        self.remote_hard_reset()
-        tasmota.set_timer(self.poll_idle, / -> self.monitor_loop()) # Main monitoring loop
+
+        # Monitor for user inputs
+        self.remote_hard_reset() # post reset, starting the monitor loop
     end
 
     # Scheduled reset to channel 1
@@ -142,15 +145,16 @@ class ShutterController : Driver
 
     # Power cycle the remote and reset software state
     def remote_hard_reset()
+        self.monitor = false
         self.fail_safe_active = false
         self.pulse_count = 0
         self.working = false
         self.queue = []
         
-        gpio.digital_write(self.pin_power, 1) # Cut power (assuming PNP or P-MOSFET)
+        gpio.digital_write(self.pin_power, 1) # Cut power
         gpio.digital_write(self.pin_led, 1)
         tasmota.delay(1000)
-        gpio.digital_write(self.pin_power, 0) # Restore power
+        gpio.digital_write(self.pin_power, 0) # Restore power --> Remote reset to channel 01
         tasmota.delay(200)
         gpio.digital_write(self.pin_led, 0)
 
@@ -161,97 +165,87 @@ class ShutterController : Driver
         self.last_act = tasmota.millis()
         
         self.publish_status(self.msg["reset"])
+        self.monitor = true
+        tasmota.set_timer(self.poll_idle, / -> self.monitor_loop()) # Main monitoring loop
         tasmota.resp_cmnd_done()
     end
 
     # Main monitoring loop for manual button presses and state management
+    #
+    # NOTE: For users to actuate the physical remote
+    # - Ensure waking up the remote, ideally with the stop button, with a gentle not too short press; chan is also supported
+    # - The script recognizes the presse and changes sleep to 0 (full CPU cycle time) - important
+    # - 'Move' operations are none critical - existing queued actions are deleted, but nothing out of sync
+    # - 'Channel' operations are critical - aliasing happens when Channel up/down button
+    #   - is actuated too quickly (est 40 ms) for ESP32 berry interpreter not getting it
+    #   - is touched for too long (est 400 ms) for the remote runnaway scrolling though the channels
+    #   - desyncing the active_chan variable
+
     def monitor_loop()
+        if (!self.monitor) return end
         var now = tasmota.millis()
         
-        # Wait for system stability after boot
-        if (now - self.boot_time < 10000) 
-            tasmota.set_timer(100, / -> self.monitor_loop())
+        # 1. Boot-Schutz (identisch, auf 2s verkürzt)
+        if (now - self.boot_time < 2000) 
+            tasmota.set_timer(200, / -> self.monitor_loop())
             return 
         end
 
-        # Monitor GPIOs for manual user interaction with the remote
+        var any_pressed = -1
         if (!self.working && !self.fail_safe_active)
-            var any_pressed = -1
             for p:self.pins 
                 if (gpio.digital_read(p) == 0) any_pressed = p; break end 
             end
             
             if (any_pressed != -1)
-                # User is pressing a button
-                if !(self.attention)
+                # --- TASTE GEDRÜCKT ---
+                if (!self.attention)
                     tasmota.cmd("Sleep 0") 
-                    if (self.log)
-                        tasmota.log("POWER!!", 2)
-                    end                  
+                    if (self.log) tasmota.log("POWER!!", 2) end                  
                     self.attention = true
                 end
 
-                self.last_act = tasmota.millis()
-                gpio.digital_write(self.pin_led, 1)
-                if (self.log)
-                    tasmota.log("KEYPRESS", 2)
-                end                    
-                
+                self.last_act = now
                 if (self.press_start_time == 0) 
                     self.press_start_time = now
                     self.active_pin = any_pressed 
                 end
                 
                 var cur_dur = now - self.press_start_time
-                # Detect if user is cycling channels manually
                 if (cur_dur > self.desync_ms && !self.needs_reset) 
                     self.needs_reset = true
-                    if (self.log) 
-                        tasmota.log("CHAN DESYNC", 2) 
-                    end
+                    if (self.log) tasmota.log("CHAN DESYNC", 2) end
                 end
                 
-                # Stuck button failsafe
-                if (cur_dur > 10000)
+                if (cur_dur > 10000 && !self.fail_safe_active)
                     self.fail_safe_active = true
                     self.publish_status(self.msg["stuck"])
                 end
             else
-                # --- BUTTON RELEASED ---
-                if (self.press_start_time > 0)
+                # --- TASTE LOSGELASSEN ---
+                if (self.press_start_time > 0 && (now - self.last_act > self.debounce_ms))
                     var duration = now - self.press_start_time
                     var p_type = self.pin_map.find(self.active_pin)
                     
-                    self.queue = [] # Clear queue on manual intervention
-                    if (self.is_sleeping)
-                        if (self.log) tasmota.log(string.format("KEYPRESSED %s - WOKE UP", p_type), 2) end 
-                    else
-                        if (self.log) tasmota.log(string.format("KEYPRESSED %s ", p_type), 2) end 
-                    end
+                    self.queue = [] 
+                    if (self.log) tasmota.log(string.format("KEYPRESSED %s %s", p_type, self.is_sleeping ? "- WOKE UP" : ""), 2) end 
 
-                    # Update internal channel counter if manual press was short
-                    if (p_type == "chan" && duration <= self.desync_ms) 
-                        if (self.is_sleeping)
-                            if (self.log)  tasmota.log("CHAN WOKE UP", 2)   end                        
-                        else
-                            var m = self.remote_channels_total
-                            var i = self.current_chan
-                            if (self.active_pin == self.pins[self.r_right]) 
-                                self.current_chan = (self.current_chan + 1) % m
-                            elif (self.active_pin == self.pins[self.r_left]) 
-                                self.current_chan = (self.current_chan - 1 + m) % m 
-                            end
-                            if (self.log)  tasmota.log( string.format("CHANKEY from %02d to %02d EXECUTED", i, self.current_chan), 2) end
+                    # Kanal-Logik (nur wenn nicht im Aufwach-Modus)
+                    if (p_type == "chan" && duration <= self.desync_ms && !self.is_sleeping) 
+                        var m = self.remote_channels_total
+                        if (self.active_pin == self.pins[self.r_right]) 
+                            self.current_chan = (self.current_chan + 1) % m
+                        elif (self.active_pin == self.pins[self.r_left]) 
+                            self.current_chan = (self.current_chan - 1 + m) % m 
                         end
+                        if (self.log) tasmota.log(string.format("CHANKEY from ... to %02d EXECUTED", self.current_chan), 2) end
                     end
                     
-                    self.is_sleeping = false
+                    self.is_sleeping = false # System ist nun wach
                     self.press_start_time = 0
-                    gpio.digital_write(self.pin_led, 0)
-
+                    
                     if (self.needs_reset)
                         self.publish_status(self.msg["user"])
-                        self.fail_safe_active = true
                     else
                         self.publish_status(string.format(self.msg["chan_fmt"], self.current_chan))
                     end
@@ -259,35 +253,25 @@ class ShutterController : Driver
             end
         end
 
-        # Handle Remote Standby / Sleep
+        # 2. Standby Logik (identisch)
         if (now - self.last_act > self.fb_timeout && !self.is_sleeping) 
             self.is_sleeping = true
-            if (self.log)  tasmota.log("IS SLEEPING TRUE", 2) end
             self.attention = false
             tasmota.cmd("Sleep 50")
             self.publish_status(self.msg["standby"]) 
         end
 
-        # Handle Manual Override cooldown
-        if (self.manual_interaction_time > 0 && (now - self.manual_interaction_time > 5000))
-            self.manual_interaction_time = 0 
-            if (self.needs_reset)
-                if (self.execute_auto_reset) self.remote_hard_reset()
-                else self.publish_status(self.msg["manual"]) end
-            else
-                self.publish_status(self.msg["ready"]) 
-            end
-        end
-
-        # Error/State LED Signaling
-        if (self.fail_safe_active || self.needs_reset) 
+        # 3. Hardware-Anzeige (LED Steuerung zentralisiert)
+        if (self.press_start_time > 0)
+            gpio.digital_write(self.pin_led, 1) # Statisch EIN beim Drücken
+        elif (self.fail_safe_active || self.needs_reset) 
             var flash_rate = self.needs_reset ? 400 : 1500
             gpio.digital_write(self.pin_led, (now / flash_rate) % 2) 
         else 
-            gpio.digital_write(self.pin_led, 0) 
+            gpio.digital_write(self.pin_led, 0) # AUS im Normalbetrieb
         end
         
-        var next_p = self.is_sleeping ? self.poll_idle : self.poll_active
+        var next_p = (self.is_sleeping && any_pressed == -1) ? self.poll_idle : self.poll_active
         tasmota.set_timer(next_p, / -> self.monitor_loop())
     end
 
