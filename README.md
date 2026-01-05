@@ -227,6 +227,61 @@ If the remote is currently on **Channel 1** and is in **Sleep mode**, a single `
 
 NOTE: monitor loop tracks chan buttons and updates self.current_chan
 
+
+================================================================================
+SHUTTER CONTROLLER: monitor_loop() - Finite State Machine (FSM)
+================================================================================
+
+       +-----------------------------------------------------------+
+       |                  START: monitor_loop()                    |
+       +-----------------------------------------------------------+
+                     |                              |
+      [now - boot_time < 2000ms?] --- YES ---> [Set Timer 200ms]
+                     |                         [     Exit      ]
+                    NO
+                     |
+       +----------------------------+        +---------------------------+
+       |   PIN SCANNING PHASE       | <----- | !working && !failsafe?    |
+       +----------------------------+  (YES) +---------------------------+
+                     |                         (NO -> skip to LED Logic)
+              [any_pressed != -1?]
+              /                \
+          (YES)                (NO)
+            |                    |
+     +--------------+     +-----------------------------------------+
+     | BUTTON ACTIVE|     |        BUTTON RELEASE DETECTION         |
+     +--------------+     +-----------------------------------------+
+     | 1. Sleep 0   |        |                                 |
+     | 2. last_act  |     [press_time > 0 && debounce_ms met?] |
+     | 3. start_time|        |                                 |
+     | 4. Monitor:  |       (YES)                            (NO)
+     |    Desync?   |        |                                 |
+     |    Stuck?    |     +-------------------------+          |
+     +--------------+     |   HANDLE RELEASE LOGIC  |          |
+            |             | 1. is_sleeping?         |          |
+            |             |    YES -> Wake Up Only  |          |
+            |             |    NO  -> Step Channel  |          |
+            |             | 2. Clear press_time     |          |
+            |             +-------------------------+          |
+            |                        |                         |
+            +------------------------+-------------------------+
+                                     |
+                    +-----------------------------------+
+                    |      STANDBY / POWER SAVING       |
+                    | (now - last_act > fb_timeout)     |
+                    | [Sleep 50 / is_sleeping = true]   |
+                    +-----------------------------------+
+                                     |
+                    +-----------------------------------+
+                    |     HARDWARE SIGNALING (LED)      |
+                    | (Priority: Press > Error > Idle)  |
+                    +-----------------------------------+
+                                     |
+                    +-----------------------------------+
+                    |         TIMER SCHEDULING          |
+                    | (poll_idle [100] vs active [10])  |
+                    +-----------------------------------+
+
 ```
 
 
