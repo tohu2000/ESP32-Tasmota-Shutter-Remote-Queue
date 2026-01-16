@@ -287,27 +287,26 @@ SHUTTER CONTROLLER: monitor_loop() - Finite State Machine (FSM)
 
 ## 🛡️ Safety & Failsafe Mechanisms
 
-Um die empfindliche 433MHz-Hardware zu schützen und eine dauerhafte Synchronisation zu gewährleisten, implementiert das Berry-Script mehrere Sicherheitsebenen:
+To protect the sensitive 433MHz hardware and ensure permanent synchronization, the Berry script implements several levels of safety:
 
 ### 1. Hardware Protection (Physical Layer)
-Die ESP32-GPIOs sind als **Open Drain** konfiguriert (sie ziehen nur gegen GND). Als zusätzliche "Versicherung" sind **330 Ω Widerstände** in jeder Steuerleitung verbaut. Diese schützen den ESP32 und die MCU der Fernbedienung vor Kurzschlüssen oder Fehlkonfigurationen (z. B. wenn ein Pin während eines Tasmota-Updates kurzzeitig auf "Push-Pull" geht).
+The ESP32 GPIOs are configured as **Open Drain** (pulling to GND only). As an additional "insurance," **330 Ω resistors** are installed in each control line. These protect both the ESP32 and the remote's MCU from short circuits or misconfigurations (e.g., if a pin briefly goes to "Push-Pull" during a Tasmota update).
 
 ### 2. Software Watchdog (Stuck-Pin Protection)
-Der `monitor_loop` überwacht permanent den Zustand aller Steuerleitungen:
-* **Manual Override:** Erkennt, wenn eine Taste länger als 400ms gedrückt wird (Desync-Gefahr).
-* **Stuck-Pin Lock:** Bleibt ein Pin länger als **10 Sekunden** am Stück auf LOW (aktiv), löst das Script einen Failsafe aus. Dies verhindert das Durchbrennen der Sende-Einheit bei einem Software-Hänger.
+The `monitor_loop` permanently monitors the state of all control lines:
+* **Manual Override:** Detects if a button is pressed longer than 400ms (risk of desync).
+* **Stuck-Pin Lock:** If a pin remains LOW (active) for more than **10 seconds** continuously, the script triggers a Failsafe. This prevents the transmitter unit from burning out in the event of a software hang.
 
 ### 3. Rate Limiting (Anti-Spam / Thermal Protection)
-Proprietäre 433MHz-Sender sind nicht für Dauerbetrieb ausgelegt. Um thermische Schäden zu vermeiden, überwacht das Script die Sendefrequenz:
-* **Pulse Counter:** Das Script zählt jeden gesendeten Impuls.
-* **Limit:** Wenn mehr als **80 Impulse innerhalb von 60 Sekunden** registriert werden (typisch für fehlerhafte Automatisierungsschleifen in Home Assistant), geht die Bridge sofort in den Lock-Modus (`FAILSAFE: Excessive Pulsing`).
-* **Cooldown:** Nach 60 Sekunden wird der Zähler automatisch zurückgesetzt.
+Proprietary 433MHz transmitters are not designed for continuous operation. To avoid thermal damage, the script monitors the transmission frequency:
+* **Pulse Counter:** The script counts every pulse sent.
+* **Limit:** If more than **80 pulses within 60 seconds** are registered (typical for faulty automation loops in Home Assistant), the bridge immediately enters lock mode (`FAILSAFE: Excessive Pulsing`).
+* **Cooldown:** The counter is automatically reset after 60 seconds.
 
 ### 4. Hard Sync (Power-Cycle Recovery)
-Da 433MHz ein Ein-Weg-Protokoll ohne Rückkanal ist, kann die Synchronisation bei intensiver manueller Nutzung verloren gehen:
-* **Hard Reset:** Über **GPIO 18** kann das Script die Stromversorgung der Fernbedienung kappen. Dies erzwingt einen Neustart der Fernbedienung auf **Kanal 01**.
-* **Unlock Command:** Mit dem Befehl `unlock <channel>` kann ein Failsafe-Zustand manuell aufgehoben und die Software wieder mit dem Display der Fernbedienung synchronisiert werden.
-
+Since 433MHz is a one-way protocol without a return channel, synchronization can be lost during intensive manual use:
+* **Hard Reset:** Using **GPIO 18**, the script can cut the power supply to the remote. This forces the remote to restart at **Channel 01**.
+* **Unlock Command:** Using the `unlock <channel>` command, a failsafe state can be manually cleared, and the software can be re-synchronized with the remote's display.
 ---
 ### 💡 Status LED Indicators
 The onboard LED provides real-time feedback on the bridge's health and synchronization status:
@@ -318,7 +317,7 @@ The onboard LED provides real-time feedback on the bridge's health and synchroni
 > [!TIP]
 > Use the `unlock <channel>` command to clear the failsafe once the issue is resolved.
 
-## 🏠 Home Assistant Integrati
+## 🏠 Home Assistant Integration
 Integrate your shutters into Home Assistant using MQTT Template Covers and Sensors.
 
 ### 1. Covconfiguration.yaml to your `cocover:
